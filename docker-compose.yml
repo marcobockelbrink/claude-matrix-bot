@@ -1,0 +1,10 @@
+services:
+  bot:
+    build: .
+    container_name: ha-matrix-bot
+    env_file: .env
+    volumes:
+      # Persist the Matrix E2E store so the bot keeps its device identity and
+      # encrypted-session keys across restarts.
+      - ./store:/app/store
+    restart: unless-stopped
