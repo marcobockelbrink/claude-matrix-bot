@@ -1,0 +1,15 @@
+# Secrets — never commit
+.env
+
+# Matrix client store (session keys, E2E crypto state)
+store/
+*.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Claude Code
+.claude/settings.local.json
