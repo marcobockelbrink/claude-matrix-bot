@@ -1,5 +1,11 @@
 # claude-matrix-bot
 
+[![release](https://img.shields.io/github/v/release/marcobockelbrink/claude-matrix-bot)](https://github.com/marcobockelbrink/claude-matrix-bot/releases)
+[![docker](https://github.com/marcobockelbrink/claude-matrix-bot/actions/workflows/docker.yml/badge.svg)](https://github.com/marcobockelbrink/claude-matrix-bot/actions/workflows/docker.yml)
+[![CodeQL](https://github.com/marcobockelbrink/claude-matrix-bot/actions/workflows/codeql.yml/badge.svg)](https://github.com/marcobockelbrink/claude-matrix-bot/actions/workflows/codeql.yml)
+[![Trivy](https://github.com/marcobockelbrink/claude-matrix-bot/actions/workflows/trivy.yml/badge.svg)](https://github.com/marcobockelbrink/claude-matrix-bot/actions/workflows/trivy.yml)
+[![signed commits](https://img.shields.io/badge/commits-signed-blue)](https://github.com/marcobockelbrink/claude-matrix-bot/commits/main)
+
 🇩🇪 [Deutsche Version](README.de.md)
 
 A Matrix chat bot, powered by the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk),
