@@ -358,7 +358,7 @@ async def main() -> None:
         target = current_run.get("targets", [None])[0] or default_matrix_target()
         if not target:
             return PermissionResultDeny(message="No channel available to confirm in.")
-        log.info("Asking chat confirmation for command: %s", cmd)
+        log.info("Asking chat confirmation for command: %s", loggable(cmd, 300))
         if await ask_confirmation(target, cmd):
             return PermissionResultAllow()
         return PermissionResultDeny(message=S["denied"])
@@ -518,7 +518,7 @@ async def main() -> None:
             filesize=size,
         )
         if not isinstance(resp, UploadResponse):
-            log.error("Upload of %s failed: %s", path.name, resp)
+            log.error("Upload of %s failed: %s", loggable(path.name, 100), resp)
             return
         if mime.startswith("image/"):
             msgtype = "m.image"
@@ -549,7 +549,7 @@ async def main() -> None:
             loggable(path.name, 100),
             mime,
             size,
-            room_id,
+            loggable(room_id, 100),
         )
 
     async def flush_outbox(targets: list[Target]) -> None:
@@ -567,7 +567,7 @@ async def main() -> None:
                     log.exception(
                         "Failed to post outbox file %s to %s",
                         loggable(path.name, 100),
-                        target,
+                        loggable(str(target), 120),
                     )
             try:
                 path.unlink()
@@ -699,7 +699,7 @@ async def main() -> None:
         log.info(
             "Message from %s in %s: %s",
             loggable(event.sender, 80),
-            room.room_id,
+            loggable(room.room_id, 100),
             loggable(body),
         )
         asyncio.create_task(run_agent([("matrix", room.room_id)], body))
@@ -708,7 +708,11 @@ async def main() -> None:
         if not is_relevant(event) or not voice_enabled:
             return
         remember_room(room.room_id)
-        log.info("Voice message from %s in %s", loggable(event.sender, 80), room.room_id)
+        log.info(
+            "Voice message from %s in %s",
+            loggable(event.sender, 80),
+            loggable(room.room_id, 100),
+        )
         asyncio.create_task(handle_matrix_voice(room, event))
 
     async def on_unknown(room: MatrixRoom, event: UnknownEvent) -> None:
@@ -733,7 +737,9 @@ async def main() -> None:
             return
         await matrix.join(room.room_id)
         log.info(
-            "Joined room %s (invited by %s)", room.room_id, loggable(event.sender, 80)
+            "Joined room %s (invited by %s)",
+            loggable(room.room_id, 100),
+            loggable(event.sender, 80),
         )
 
     async def on_sync(_response: SyncResponse) -> None:
