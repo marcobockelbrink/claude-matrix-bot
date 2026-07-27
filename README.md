@@ -1,5 +1,7 @@
 # claude-matrix-bot
 
+🇩🇪 [Deutsche Version](README.de.md)
+
 A Matrix chat bot, powered by the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk),
 that operates a [Home Assistant](https://www.home-assistant.io/) instance from your phone.
 Message it in a private Matrix room and it reads states, edits automations, calls services,
@@ -8,8 +10,8 @@ do from a Claude Code session, reachable wherever your phone has signal.
 
 > ⚠️ **Read this before running it.** This gives a chat bot the keys to your house. Most tool
 > calls (shell commands, HA service calls) run **without a per-action approval prompt** — the
-> main guard is the Matrix sender allowlist: the bot responds to exactly one Matrix user ID
-> and ignores everyone else. With `CONFIRM_DESTRUCTIVE=true` (default), destructive commands
+> main guard is the sender allowlist: the bot responds only to the Matrix IDs (and Signal
+> numbers) you list and ignores everyone else. With `CONFIRM_DESTRUCTIVE=true` (default), destructive commands
 > (deletes, HA restart/stop, backup deletion) additionally require a yes/no confirmation in
 > the chat. Use a strong, unique password on the bot's Matrix account, keep the room private
 > and encrypted, and treat the host running the container as trusted infrastructure. This is
@@ -86,8 +88,8 @@ Fill in `.env`:
 - `HA_BASE_URL` / `HA_TOKEN` — your HA public URL and a long-lived access token
   (Home Assistant → your profile → Security → Long-lived access tokens).
 - `MATRIX_HOMESERVER` / `MATRIX_USER` / `MATRIX_PASSWORD` — the **bot's** account.
-- `MATRIX_ALLOWED_USER` — **your** Matrix ID (e.g. `@you:matrix.org`). This is the only sender
-  the bot will ever respond to or accept invites from.
+- `MATRIX_ALLOWED_USERS` — comma-separated Matrix IDs (e.g. `@you:matrix.org`). These are the
+  only senders the bot will ever respond to or accept invites from.
 
 Optional features (see comments in `.env.example`): `BOT_LANG` (de/en), `WEBHOOK_TOKEN`
 (enables the notification webhook), `BRIEFING_TIME` (daily briefing, e.g. `07:00`),
@@ -242,8 +244,9 @@ sealed-secrets / SOPS). See `deploy/helm/ha-matrix-bot/values.yaml` for all opti
 
 ## Notes / limitations
 
-- **One room, one user.** The allowlist is a single Matrix ID. Webhook/briefing messages go
-  to `NOTIFY_ROOM` if set, otherwise to the room you last wrote in.
+- **Allowlist-only.** The bot talks to the Matrix IDs / Signal numbers you list, nobody else.
+  Webhook/briefing messages go to `NOTIFY_ROOM` if set, otherwise to the room someone
+  allowlisted last wrote in (plus `SIGNAL_NOTIFY`, if configured).
 - **Fresh conversation on restart.** The chat transcript is held in memory; the agent's
   `memory.md` notes file (in the `data/` volume) is what carries over.
 - **REST/WS only, no SSH.** Automations, service calls, config-entry flows, and restarts are
@@ -252,10 +255,20 @@ sealed-secrets / SOPS). See `deploy/helm/ha-matrix-bot/values.yaml` for all opti
 - **Voice transcription is CPU-bound.** The first voice message downloads the Whisper model
   (cached in `data/`); transcription of a short message takes a few seconds on a modern CPU.
 
+## Security
+
+- Commits and release tags are signed.
+- CI runs [CodeQL](https://github.com/marcobockelbrink/claude-matrix-bot/security/code-scanning)
+  and Trivy (filesystem, IaC, and container-image scans) on every push; Dependabot watches
+  pip, Docker, and GitHub Actions dependencies. Secret scanning with push protection is on.
+- Found a vulnerability? Please use
+  [private vulnerability reporting](https://github.com/marcobockelbrink/claude-matrix-bot/security/advisories/new) —
+  see [SECURITY.md](SECURITY.md).
+
 ## Development
 
 `bot.py` is a single-file bridge — the matrix-nio event loop on one side, a persistent
 `ClaudeSDKClient` on the other. `system_prompt.md` is the Home Assistant runbook fed to the
-agent. See `CLAUDE.md` for notes aimed at future Claude Code sessions working on this repo.
+agent.
 
 🤖 Built with [Claude Code](https://claude.com/claude-code)

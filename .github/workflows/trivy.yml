@@ -1,0 +1,52 @@
+name: trivy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "41 5 * * 1" # weekly, Monday morning
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # Scans dependency manifests and config files (Dockerfile, k8s, Helm).
+  fs-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,misconfig,secret
+          format: sarif
+          output: trivy-fs.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  # Scans the built container image (OS packages + Python deps).
+  image-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: local/claude-matrix-bot:scan
+          cache-from: type=gha
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: local/claude-matrix-bot:scan
+          format: sarif
+          output: trivy-image.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
