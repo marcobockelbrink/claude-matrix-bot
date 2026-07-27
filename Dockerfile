@@ -22,10 +22,13 @@ COPY bot.py system_prompt.md ./
 # The Agent SDK's bypassPermissions mode refuses to run as root — use an
 # unprivileged user. It also needs a writable $HOME for its CLI state.
 RUN useradd -m -u 1000 bot \
-    && mkdir -p /app/store \
+    && mkdir -p /app/store /app/data /app/outbox \
     && chown -R bot:bot /app
 USER bot
 ENV HOME=/home/bot
+# Whisper models are downloaded on first use — cache them in the persistent
+# data volume so they survive container rebuilds.
+ENV HF_HOME=/app/data/hf
 
 # Persist the Matrix E2E store (device keys, sync token) across restarts.
 VOLUME ["/app/store"]

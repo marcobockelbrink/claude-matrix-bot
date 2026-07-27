@@ -6,13 +6,33 @@ Message it in a private Matrix room and it reads states, edits automations, call
 inspects logs, and restarts Home Assistant Core on your behalf — the same kind of work you'd
 do from a Claude Code session, reachable wherever your phone has signal.
 
-> ⚠️ **Read this before running it.** This gives a chat bot the keys to your house. It runs
-> with `bypassPermissions`, so it executes tool calls (shell commands, HA service calls,
-> restarts) **without a per-action approval prompt**. The only thing standing between "anyone"
-> and "restart my heating" is the Matrix sender allowlist — the bot responds to exactly one
-> Matrix user ID and ignores everyone else. Use a strong, unique password on the bot's Matrix
-> account, keep the room private and encrypted, and treat the host running the container as
-> trusted infrastructure. This is intentionally powerful; make sure that's what you want.
+> ⚠️ **Read this before running it.** This gives a chat bot the keys to your house. Most tool
+> calls (shell commands, HA service calls) run **without a per-action approval prompt** — the
+> main guard is the Matrix sender allowlist: the bot responds to exactly one Matrix user ID
+> and ignores everyone else. With `CONFIRM_DESTRUCTIVE=true` (default), destructive commands
+> (deletes, HA restart/stop, backup deletion) additionally require a yes/no confirmation in
+> the chat. Use a strong, unique password on the bot's Matrix account, keep the room private
+> and encrypted, and treat the host running the container as trusted infrastructure. This is
+> intentionally powerful; make sure that's what you want.
+
+## Features
+
+- **Chat-ops for Home Assistant** — read states, call services, edit automations, inspect
+  logs, restart Core, all through the HA HTTP API.
+- **Voice messages** — send a Matrix voice message; the bot transcribes it locally
+  (faster-whisper, no cloud STT) and treats it as a prompt.
+- **Images & files back** — the agent drops camera snapshots, charts, or config files into
+  an outbox that gets uploaded to the room (E2E-encrypted where the room is).
+- **Proactive notifications** — HA automations POST to the bot's webhook; the message is
+  posted verbatim, or (with `"smart": true`) investigated and phrased by the agent.
+- **Daily briefing** — an optional scheduled agent run (PV forecast, weather, waste
+  collection, fuel prices, HA errors — see `system_prompt.md`).
+- **Persistent memory** — the agent keeps a notes file on a mounted volume that survives
+  restarts.
+- **Destructive-action confirmation** — dangerous shell commands wait for a **yes/no**
+  (or 👍/👎 reaction) from you in the chat.
+- **Bilingual** — bot UI strings in German or English (`BOT_LANG`); the agent always mirrors
+  the language you write in.
 
 ## How it works
 
@@ -59,12 +79,17 @@ cp .env.example .env
 
 Fill in `.env`:
 
-- `ANTHROPIC_API_KEY` — from the [Claude Console](https://platform.claude.com/).
+- `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`, uses your Claude subscription) **or**
+  `ANTHROPIC_API_KEY` (pay-per-use, from the [Claude Console](https://platform.claude.com/)).
 - `HA_BASE_URL` / `HA_TOKEN` — your HA public URL and a long-lived access token
   (Home Assistant → your profile → Security → Long-lived access tokens).
 - `MATRIX_HOMESERVER` / `MATRIX_USER` / `MATRIX_PASSWORD` — the **bot's** account.
 - `MATRIX_ALLOWED_USER` — **your** Matrix ID (e.g. `@you:matrix.org`). This is the only sender
   the bot will ever respond to or accept invites from.
+
+Optional features (see comments in `.env.example`): `BOT_LANG` (de/en), `WEBHOOK_TOKEN`
+(enables the notification webhook), `BRIEFING_TIME` (daily briefing, e.g. `07:00`),
+`WHISPER_MODEL` (voice transcription, `off` to disable), `CONFIRM_DESTRUCTIVE`.
 
 `.env` is gitignored — it never gets committed.
 
@@ -82,6 +107,35 @@ The `store/` directory (created next to the compose file, mounted into the conta
 bot's Matrix device identity and encryption keys — keep it around so the bot doesn't re-key on
 every restart.
 
+## Hooking up Home Assistant notifications
+
+The webhook listens on port `8321` (mapped in `docker-compose.yml`). In Home Assistant,
+define a `rest_command` pointing at the host running the bot:
+
+```yaml
+# configuration.yaml
+rest_command:
+  matrix_bot_notify:
+    url: "http://<bot-host-ip>:8321/notify"
+    method: post
+    headers:
+      X-Token: !secret matrix_bot_webhook_token
+    content_type: application/json
+    payload: '{"message": {{ message | tojson }}, "smart": {{ smart | default(false) | tojson }}}'
+```
+
+Then call it from any automation:
+
+```yaml
+actions:
+  - action: rest_command.matrix_bot_notify
+    data:
+      message: "Battery below 30% — pool pump switched off."
+      smart: true   # let the agent investigate and phrase the push message
+```
+
+With `smart: false` (default) the message is posted verbatim, prefixed with 🔔.
+
 ## Where to run it
 
 Any host with outbound internet works — no inbound ports needed:
@@ -90,14 +144,17 @@ Any host with outbound internet works — no inbound ports needed:
 - **This machine**, for testing (`docker compose up`) — but it's only reachable while that
   machine is on.
 
-## Notes / limitations (v1)
+## Notes / limitations
 
-- **One room, one user.** The allowlist is a single Matrix ID.
-- **Fresh session on restart.** Conversation context is held in memory; restarting the
-  container starts a new agent session (no persisted transcript).
+- **One room, one user.** The allowlist is a single Matrix ID. Webhook/briefing messages go
+  to `NOTIFY_ROOM` if set, otherwise to the room you last wrote in.
+- **Fresh conversation on restart.** The chat transcript is held in memory; the agent's
+  `memory.md` notes file (in the `data/` volume) is what carries over.
 - **REST/WS only, no SSH.** Automations, service calls, config-entry flows, and restarts are
   all covered; editing files inside `custom_components/` is not.
 - **Serial.** One agent run at a time — fine for a single-user home-automation chat.
+- **Voice transcription is CPU-bound.** The first voice message downloads the Whisper model
+  (cached in `data/`); transcription of a short message takes a few seconds on a modern CPU.
 
 ## Development
 
