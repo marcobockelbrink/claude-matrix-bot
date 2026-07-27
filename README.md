@@ -179,11 +179,66 @@ With `smart: false` (default) the message is posted verbatim, prefixed with 🔔
 
 ## Where to run it
 
-Any host with outbound internet works — no inbound ports needed:
+Any host with outbound internet works (inbound is only needed for the optional
+notification webhook):
 
 - **A small always-on box** (Raspberry Pi, mini-PC, NAS with Docker/Container Manager, a cheap VPS).
 - **This machine**, for testing (`docker compose up`) — but it's only reachable while that
   machine is on.
+- **Kubernetes** — see below.
+
+### Prebuilt image
+
+Every push to `main` builds a multi-arch image (amd64 + arm64) via GitHub Actions:
+
+```
+ghcr.io/marcobockelbrink/claude-matrix-bot:latest
+```
+
+Tags (`vX.Y.Z`) get matching image tags. To use it with compose instead of building
+locally, replace `build: .` with `image: ghcr.io/marcobockelbrink/claude-matrix-bot:latest`.
+
+### Kubernetes (plain manifests)
+
+```bash
+cp deploy/k8s/secret.example.yaml deploy/k8s/secret.yaml   # fill in, don't commit
+kubectl apply -f deploy/k8s/secret.yaml -f deploy/k8s/bot.yaml
+# optional Signal sidecar:
+kubectl apply -f deploy/k8s/signal.yaml
+```
+
+One replica only (the bot holds a Matrix device identity and a persistent agent session);
+two PVCs persist the Matrix E2E store and the agent's memory/Whisper cache.
+
+### Kubernetes (Helm)
+
+```bash
+helm install ha-matrix-bot deploy/helm/ha-matrix-bot \
+  --namespace ha-matrix-bot --create-namespace \
+  --values my-values.yaml
+```
+
+Minimal `my-values.yaml`:
+
+```yaml
+secrets:
+  values:
+    CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-..."
+    HA_BASE_URL: "https://your-home-assistant.example.com"
+    HA_TOKEN: "..."
+    MATRIX_HOMESERVER: "https://matrix.org"
+    MATRIX_USER: "@yourbot:matrix.org"
+    MATRIX_PASSWORD: "..."
+    MATRIX_ALLOWED_USERS: "@you:matrix.org"
+    WEBHOOK_TOKEN: "long-random-string"
+config:
+  briefingTime: "07:00"
+signal:
+  enabled: false   # flip on + add SIGNAL_* secrets for the Signal channel
+```
+
+Alternatively point `secrets.existingSecret` at a Secret you manage (e.g. via
+sealed-secrets / SOPS). See `deploy/helm/ha-matrix-bot/values.yaml` for all options.
 
 ## Notes / limitations
 

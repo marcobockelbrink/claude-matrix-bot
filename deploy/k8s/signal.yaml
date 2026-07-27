@@ -1,0 +1,65 @@
+# Optional Signal channel — apply only if you use Signal:
+#   kubectl apply -f signal.yaml
+# Then set SIGNAL_API_URL=http://ha-matrix-bot-signal:8080 (plus number and
+# allowlist) in the bot's Secret and restart the bot deployment.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ha-matrix-bot-signal
+  namespace: ha-matrix-bot
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ha-matrix-bot-signal
+  namespace: ha-matrix-bot
+  labels:
+    app.kubernetes.io/name: ha-matrix-bot-signal
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ha-matrix-bot-signal
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ha-matrix-bot-signal
+    spec:
+      containers:
+        - name: signal
+          image: bbernhard/signal-cli-rest-api:latest
+          env:
+            # json-rpc mode enables the websocket receive endpoint.
+            - name: MODE
+              value: json-rpc
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: signal-data
+              mountPath: /home/.local/share/signal-cli
+      volumes:
+        - name: signal-data
+          persistentVolumeClaim:
+            claimName: ha-matrix-bot-signal
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ha-matrix-bot-signal
+  namespace: ha-matrix-bot
+spec:
+  selector:
+    app.kubernetes.io/name: ha-matrix-bot-signal
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  type: ClusterIP

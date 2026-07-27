@@ -1,0 +1,109 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ha-matrix-bot
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ha-matrix-bot-store
+  namespace: ha-matrix-bot
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ha-matrix-bot-data
+  namespace: ha-matrix-bot
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      # Holds agent memory, bot state, and the Whisper model cache.
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ha-matrix-bot
+  namespace: ha-matrix-bot
+  labels:
+    app.kubernetes.io/name: ha-matrix-bot
+spec:
+  # The bot holds a Matrix device identity and a persistent agent session —
+  # never run more than one replica.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ha-matrix-bot
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ha-matrix-bot
+    spec:
+      securityContext:
+        # Image runs as uid 1000 ("bot"); make the PVCs writable for it.
+        fsGroup: 1000
+      containers:
+        - name: bot
+          image: ghcr.io/marcobockelbrink/claude-matrix-bot:latest
+          envFrom:
+            - secretRef:
+                name: ha-matrix-bot
+          env:
+            - name: BOT_LANG
+              value: "de"
+            - name: TZ
+              value: "Europe/Berlin"
+            - name: WEBHOOK_PORT
+              value: "8321"
+            - name: BRIEFING_TIME
+              value: ""
+            - name: WHISPER_MODEL
+              value: "small"
+            - name: CONFIRM_DESTRUCTIVE
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 8321
+          volumeMounts:
+            - name: store
+              mountPath: /app/store
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              # Whisper transcription peaks well above idle usage.
+              memory: 2Gi
+      volumes:
+        - name: store
+          persistentVolumeClaim:
+            claimName: ha-matrix-bot-store
+        - name: data
+          persistentVolumeClaim:
+            claimName: ha-matrix-bot-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ha-matrix-bot
+  namespace: ha-matrix-bot
+spec:
+  selector:
+    app.kubernetes.io/name: ha-matrix-bot
+  ports:
+    - name: http
+      port: 8321
+      targetPort: http
+  # Change to LoadBalancer / add an Ingress if Home Assistant must reach the
+  # webhook from outside the cluster.
+  type: ClusterIP

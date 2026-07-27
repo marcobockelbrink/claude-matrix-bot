@@ -1,0 +1,69 @@
+image:
+  repository: ghcr.io/marcobockelbrink/claude-matrix-bot
+  tag: latest
+  pullPolicy: Always
+
+# Non-secret runtime configuration (rendered as plain env vars).
+config:
+  botLang: de
+  tz: Europe/Berlin
+  webhookPort: 8321
+  briefingTime: ""        # e.g. "07:00"; empty disables the daily briefing
+  whisperModel: small     # tiny|base|small|medium|large-v3|off
+  confirmDestructive: "true"
+  # Optional fixed Matrix room for webhook/briefing messages:
+  notifyRoom: ""
+
+# Secret configuration. Either provide the values here (a Secret is created
+# for you) or point existingSecret at one you manage yourself — its keys must
+# match the env var names from .env.example (CLAUDE_CODE_OAUTH_TOKEN or
+# ANTHROPIC_API_KEY, HA_BASE_URL, HA_TOKEN, MATRIX_HOMESERVER, MATRIX_USER,
+# MATRIX_PASSWORD, MATRIX_ALLOWED_USERS, WEBHOOK_TOKEN, SIGNAL_*).
+secrets:
+  existingSecret: ""
+  values: {}
+    # CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-..."
+    # HA_BASE_URL: "https://your-home-assistant.example.com"
+    # HA_TOKEN: "..."
+    # MATRIX_HOMESERVER: "https://matrix.org"
+    # MATRIX_USER: "@yourbot:matrix.org"
+    # MATRIX_PASSWORD: "..."
+    # MATRIX_ALLOWED_USERS: "@you:matrix.org"
+    # WEBHOOK_TOKEN: "..."
+
+service:
+  type: ClusterIP
+  port: 8321
+
+persistence:
+  store:
+    size: 1Gi
+    storageClass: ""
+  data:
+    # Agent memory, bot state, Whisper model cache.
+    size: 5Gi
+    storageClass: ""
+
+# Optional Signal channel (signal-cli-rest-api sidecar deployment).
+# When enabled, also set SIGNAL_NUMBER / SIGNAL_ALLOWED_NUMBERS in secrets;
+# SIGNAL_API_URL defaults to the in-cluster service and can be overridden
+# via secrets if needed.
+signal:
+  enabled: false
+  image:
+    repository: bbernhard/signal-cli-rest-api
+    tag: latest
+  persistence:
+    size: 1Gi
+    storageClass: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

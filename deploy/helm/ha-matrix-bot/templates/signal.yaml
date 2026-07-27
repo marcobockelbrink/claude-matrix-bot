@@ -1,0 +1,72 @@
+{{- if .Values.signal.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ha-matrix-bot.fullname" . }}-signal
+  labels:
+    {{- include "ha-matrix-bot.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.signal.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.signal.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ha-matrix-bot.fullname" . }}-signal
+  labels:
+    {{- include "ha-matrix-bot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: signal
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "ha-matrix-bot.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: signal
+  template:
+    metadata:
+      labels:
+        {{- include "ha-matrix-bot.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: signal
+    spec:
+      containers:
+        - name: signal
+          image: "{{ .Values.signal.image.repository }}:{{ .Values.signal.image.tag }}"
+          env:
+            # json-rpc mode enables the websocket receive endpoint.
+            - name: MODE
+              value: json-rpc
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: signal-data
+              mountPath: /home/.local/share/signal-cli
+      volumes:
+        - name: signal-data
+          persistentVolumeClaim:
+            claimName: {{ include "ha-matrix-bot.fullname" . }}-signal
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ha-matrix-bot.fullname" . }}-signal
+  labels:
+    {{- include "ha-matrix-bot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: signal
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ha-matrix-bot.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: signal
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+{{- end }}

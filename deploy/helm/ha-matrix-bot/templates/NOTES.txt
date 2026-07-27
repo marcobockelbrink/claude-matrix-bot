@@ -1,0 +1,23 @@
+ha-matrix-bot deployed.
+
+1. Watch it come up:
+     kubectl logs -n {{ .Release.Namespace }} -f deploy/{{ include "ha-matrix-bot.fullname" . }}
+   You should see "Claude Agent SDK session connected" and "Logged in to Matrix".
+
+2. Status page (port-forward, then open in a browser with ?token=<WEBHOOK_TOKEN>):
+     kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "ha-matrix-bot.fullname" . }} 8321:{{ .Values.service.port }}
+     open "http://localhost:8321/status?token=..."
+
+{{- if not (or .Values.secrets.existingSecret .Values.secrets.values) }}
+
+WARNING: no secrets configured. Set secrets.values (or secrets.existingSecret)
+— the bot will crash-loop without its Matrix/Claude/HA credentials.
+{{- end }}
+{{- if .Values.signal.enabled }}
+
+Signal sidecar is enabled. One-time number registration:
+     kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "ha-matrix-bot.fullname" . }}-signal 8380:8080
+     curl -X POST http://127.0.0.1:8380/v1/register/+49XXXXXXXXX
+     curl -X POST http://127.0.0.1:8380/v1/register/+49XXXXXXXXX/verify/<sms-code>
+Also set SIGNAL_NUMBER and SIGNAL_ALLOWED_NUMBERS in the bot's secret.
+{{- end }}

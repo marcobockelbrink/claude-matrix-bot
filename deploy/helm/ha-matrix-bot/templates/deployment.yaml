@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ha-matrix-bot.fullname" . }}
+  labels:
+    {{- include "ha-matrix-bot.labels" . | nindent 4 }}
+spec:
+  # The bot holds a Matrix device identity and a persistent agent session —
+  # never run more than one replica.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "ha-matrix-bot.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ha-matrix-bot.selectorLabels" . | nindent 8 }}
+      {{- if and (not .Values.secrets.existingSecret) .Values.secrets.values }}
+      annotations:
+        checksum/secret: {{ .Values.secrets.values | toYaml | sha256sum }}
+      {{- end }}
+    spec:
+      securityContext:
+        # Image runs as uid 1000 ("bot"); make the PVCs writable for it.
+        fsGroup: 1000
+      containers:
+        - name: bot
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ include "ha-matrix-bot.secretName" . }}
+          env:
+            - name: BOT_LANG
+              value: {{ .Values.config.botLang | quote }}
+            - name: TZ
+              value: {{ .Values.config.tz | quote }}
+            - name: WEBHOOK_PORT
+              value: {{ .Values.config.webhookPort | quote }}
+            - name: BRIEFING_TIME
+              value: {{ .Values.config.briefingTime | quote }}
+            - name: WHISPER_MODEL
+              value: {{ .Values.config.whisperModel | quote }}
+            - name: CONFIRM_DESTRUCTIVE
+              value: {{ .Values.config.confirmDestructive | quote }}
+            {{- with .Values.config.notifyRoom }}
+            - name: NOTIFY_ROOM
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.signal.enabled }}
+            - name: SIGNAL_API_URL
+              value: "http://{{ include "ha-matrix-bot.fullname" . }}-signal:8080"
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.config.webhookPort }}
+          volumeMounts:
+            - name: store
+              mountPath: /app/store
+            - name: data
+              mountPath: /app/data
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: store
+          persistentVolumeClaim:
+            claimName: {{ include "ha-matrix-bot.fullname" . }}-store
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "ha-matrix-bot.fullname" . }}-data
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
