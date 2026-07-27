@@ -23,6 +23,7 @@ unattended.
 
 import asyncio
 import base64
+import hmac
 import html
 import json
 import logging
@@ -141,12 +142,17 @@ Target = tuple[str, str]
 
 # Shell commands matching any of these need an owner confirmation in chat
 # (when CONFIRM_DESTRUCTIVE is on). Everything else runs unattended.
+# NOTE: this is an accident guard, not a security boundary — a sufficiently
+# creative command (or a script written first, executed second) can slip past
+# any pattern list. See SECURITY.md.
 DESTRUCTIVE_RE = re.compile(
     r"(?ix)"
     r"\brm\b | \brmdir\b | \bmkfs\b | \bdd\s+if= | \bshutdown\b | \breboot\b"
-    r"| \bkill(all)?\b | \bpurge\b"
-    r"| -X\s*DELETE"
+    r"| \bkill(all)?\b | \bpurge\b | \btruncate\b | \bshred\b"
+    r"| \bfind\b[^|;]*-delete"
+    r"| (-X|--request)\s*['\"]?DELETE"
     r"| /api/services/homeassistant/(restart|stop)"
+    r"| homeassistant[./](restart|stop)"
     r"| backup/delete"
 )
 
@@ -793,8 +799,12 @@ async def main() -> None:
     webhook_runner = None
     if webhook_port and webhook_token:
 
+        def token_ok(request: web.Request) -> bool:
+            supplied = request.headers.get("X-Token") or request.query.get("token") or ""
+            return hmac.compare_digest(supplied, webhook_token)
+
         async def handle_notify(request: web.Request) -> web.Response:
-            if request.headers.get("X-Token") != webhook_token:
+            if not token_ok(request):
                 return web.Response(status=401, text="bad token")
             try:
                 payload = await request.json()
@@ -842,8 +852,7 @@ async def main() -> None:
             }
 
         async def handle_status(request: web.Request) -> web.Response:
-            token = request.headers.get("X-Token") or request.query.get("token")
-            if token != webhook_token:
+            if not token_ok(request):
                 return web.Response(status=401, text="bad token")
             wants_html = "text/html" in request.headers.get("Accept", "")
             if request.query.get("format") == "json" or not wants_html:
