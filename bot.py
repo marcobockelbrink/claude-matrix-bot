@@ -59,7 +59,20 @@ def chunk(text: str, size: int = CHUNK_CHARS):
 
 
 async def main() -> None:
-    anthropic_key = require_env("ANTHROPIC_API_KEY")
+    # Either a Claude subscription OAuth token (`claude setup-token`) or a
+    # pay-per-use API key from console.anthropic.com works; the Agent SDK
+    # picks up whichever env var is set.
+    claude_auth = {
+        name: value
+        for name in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+        if (value := os.environ.get(name))
+    }
+    if not claude_auth:
+        log.error(
+            "Missing Claude credentials: set CLAUDE_CODE_OAUTH_TOKEN "
+            "(from `claude setup-token`) or ANTHROPIC_API_KEY in .env"
+        )
+        sys.exit(1)
     ha_base_url = require_env("HA_BASE_URL").rstrip("/")
     ha_token = require_env("HA_TOKEN")
     homeserver = require_env("MATRIX_HOMESERVER")
@@ -82,7 +95,7 @@ async def main() -> None:
         env={
             "HA_BASE_URL": ha_base_url,
             "HA_TOKEN": ha_token,
-            "ANTHROPIC_API_KEY": anthropic_key,
+            **claude_auth,
         },
         model=model,
     )
