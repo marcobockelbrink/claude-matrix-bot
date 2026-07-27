@@ -26,6 +26,10 @@ RUN useradd -m -u 1000 bot \
     && chown -R bot:bot /app
 USER bot
 ENV HOME=/home/bot
+
+# Baked in at build time (CI passes the tag/branch, compose passes git describe).
+ARG VERSION=dev
+ENV BOT_VERSION=$VERSION
 # Whisper models are downloaded on first use — cache them in the persistent
 # data volume so they survive container rebuilds.
 ENV HF_HOME=/app/data/hf

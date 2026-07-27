@@ -1,6 +1,10 @@
 services:
   bot:
-    build: .
+    build:
+      context: .
+      args:
+        # Build with: BOT_VERSION=$(git describe --tags --always) docker compose up -d --build
+        VERSION: ${BOT_VERSION:-dev}
     container_name: ha-matrix-bot
     env_file: .env
     ports:

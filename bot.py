@@ -74,6 +74,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("ha-matrix-bot")
 
+BOT_VERSION = os.environ.get("BOT_VERSION", "dev")
+
 # Recent log lines, served on the /status page.
 LOG_BUFFER: deque = deque(maxlen=200)
 
@@ -108,8 +110,9 @@ STATUS_PAGE = """<!doctype html>
         font-size: 12px; line-height: 1.4; }}
   .muted {{ color: #8b949e; }}
 </style></head><body>
-<h1>🤖 ha-matrix-bot <span class="{cls}">{state}</span></h1>
+<h1>🤖 ha-matrix-bot <span class="muted">{version}</span> <span class="{cls}">{state}</span></h1>
 <table>
+<tr><td class="muted">Version</td><td>{version}</td></tr>
 <tr><td class="muted">Uptime</td><td>{uptime}</td></tr>
 <tr><td class="muted">Matrix</td><td>{matrix}</td></tr>
 <tr><td class="muted">Signal</td><td>{signal}</td></tr>
@@ -383,7 +386,8 @@ async def main() -> None:
     claude = ClaudeSDKClient(options=agent_options)
     await claude.connect()
     log.info(
-        "Claude Agent SDK session connected (confirm_destructive=%s, signal=%s).",
+        "Claude Agent SDK session connected (version=%s, confirm_destructive=%s, signal=%s).",
+        BOT_VERSION,
         confirm_destructive,
         signal_enabled,
     )
@@ -822,6 +826,7 @@ async def main() -> None:
             now = time.time()
             return {
                 "ok": True,
+                "version": BOT_VERSION,
                 "uptime_s": int(now - started_at),
                 "matrix_connected": bool(
                     last_sync["ts"] and now - last_sync["ts"] < 120
@@ -869,6 +874,7 @@ async def main() -> None:
                 for r in run_history
             ) or '<tr><td colspan="5" class="muted">none yet</td></tr>'
             page = STATUS_PAGE.format(
+                version=html.escape(BOT_VERSION),
                 cls="ok" if p["matrix_connected"] else "bad",
                 state="online" if p["matrix_connected"] else "degraded",
                 uptime=fmt_uptime(p["uptime_s"]),
