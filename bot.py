@@ -23,6 +23,7 @@ unattended.
 
 import asyncio
 import base64
+import html
 import json
 import logging
 import mimetypes
@@ -31,6 +32,7 @@ import re
 import sys
 import tempfile
 import time
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
@@ -48,6 +50,7 @@ from nio import (
     RoomEncryptedAudio,
     RoomMessageAudio,
     RoomMessageText,
+    SyncResponse,
     UnknownEvent,
     UploadResponse,
 )
@@ -70,6 +73,56 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
 )
 log = logging.getLogger("ha-matrix-bot")
+
+# Recent log lines, served on the /status page.
+LOG_BUFFER: deque = deque(maxlen=200)
+
+
+class _RingBufferHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            LOG_BUFFER.append(self.format(record))
+        except Exception:  # never let logging take the bot down
+            pass
+
+
+_ring = _RingBufferHandler()
+_ring.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+)
+logging.getLogger().addHandler(_ring)
+
+STATUS_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="15">
+<title>ha-matrix-bot</title>
+<style>
+  body {{ font: 14px/1.5 -apple-system, system-ui, sans-serif; background: #14161a;
+         color: #d8dee4; max-width: 780px; margin: 2rem auto; padding: 0 1rem; }}
+  h1 {{ font-size: 1.2rem; }} h2 {{ font-size: 1rem; margin-top: 1.6rem; }}
+  .ok {{ color: #7ee787; }} .bad {{ color: #ff7b72; }}
+  table {{ border-collapse: collapse; width: 100%; }}
+  td, th {{ text-align: left; padding: .25rem .6rem .25rem 0; vertical-align: top; }}
+  pre {{ background: #0d1117; padding: .8rem; border-radius: 8px; overflow-x: auto;
+        font-size: 12px; line-height: 1.4; }}
+  .muted {{ color: #8b949e; }}
+</style></head><body>
+<h1>🤖 ha-matrix-bot <span class="{cls}">{state}</span></h1>
+<table>
+<tr><td class="muted">Uptime</td><td>{uptime}</td></tr>
+<tr><td class="muted">Matrix</td><td>{matrix}</td></tr>
+<tr><td class="muted">Signal</td><td>{signal}</td></tr>
+<tr><td class="muted">Voice</td><td>{voice}</td></tr>
+<tr><td class="muted">Confirm destructive</td><td>{confirm}</td></tr>
+<tr><td class="muted">Next briefing</td><td>{briefing}</td></tr>
+</table>
+<h2>Agent runs</h2>
+<table><tr><th>Time</th><th>Via</th><th></th><th>Duration</th><th>Prompt</th></tr>{runs}</table>
+<h2>Log</h2>
+<pre>{logs}</pre>
+<p class="muted">auto-refreshes every 15 s</p>
+</body></html>"""
 
 STORE_PATH = "./store"
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
@@ -234,6 +287,13 @@ async def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
     state = load_state()
+
+    # ── Status bookkeeping (served on /status) ───────────────────────────────
+    started_at = time.time()
+    run_history: deque = deque(maxlen=20)
+    last_sync = {"ts": 0.0}
+    signal_state = {"connected": False}
+    briefing_next = {"iso": None}
 
     system_prompt = Path(__file__).with_name("system_prompt.md").read_text()
 
@@ -497,6 +557,8 @@ async def main() -> None:
             if announce:
                 await deliver(targets[0], S["thinking"])
             parts: list[str] = []
+            t0 = time.time()
+            ok = True
             try:
                 await claude.query(prompt)
                 async for message in claude.receive_response():
@@ -508,11 +570,21 @@ async def main() -> None:
                         if message.subtype and message.subtype != "success":
                             log.warning("Agent turn ended: %s", message.subtype)
             except Exception:
+                ok = False
                 log.exception("Agent run failed")
                 await deliver(targets[0], S["error"])
                 return
             finally:
                 current_run.clear()
+                run_history.appendleft(
+                    {
+                        "time": datetime.now(tz).isoformat(timespec="seconds"),
+                        "via": targets[0][0],
+                        "ok": ok,
+                        "duration_s": round(time.time() - t0, 1),
+                        "prompt": prompt[:80],
+                    }
+                )
 
             reply = "\n\n".join(parts).strip() or S["no_text"]
             for target in targets:
@@ -628,10 +700,14 @@ async def main() -> None:
         await matrix.join(room.room_id)
         log.info("Joined room %s (invited by %s)", room.room_id, event.sender)
 
+    async def on_sync(_response: SyncResponse) -> None:
+        last_sync["ts"] = time.time()
+
     matrix.add_event_callback(on_message, RoomMessageText)
     matrix.add_event_callback(on_audio, (RoomMessageAudio, RoomEncryptedAudio))
     matrix.add_event_callback(on_unknown, UnknownEvent)
     matrix.add_event_callback(on_invite, InviteMemberEvent)
+    matrix.add_response_callback(on_sync, SyncResponse)
 
     # ── Signal receive loop ───────────────────────────────────────────────────
     async def handle_signal_envelope(data: dict) -> None:
@@ -690,6 +766,7 @@ async def main() -> None:
             try:
                 async with http.ws_connect(url, heartbeat=30) as ws:
                     log.info("Signal websocket connected (%s).", signal_number)
+                    signal_state["connected"] = True
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             try:
@@ -702,6 +779,8 @@ async def main() -> None:
                 raise
             except Exception as exc:
                 log.warning("Signal connection lost (%s) — retrying in 10s", exc)
+            finally:
+                signal_state["connected"] = False
             await asyncio.sleep(10)
 
     signal_task = asyncio.create_task(signal_loop()) if signal_enabled else None
@@ -739,12 +818,77 @@ async def main() -> None:
                     await deliver(target, S["notify_prefix"] + message)
             return web.json_response({"ok": True})
 
+        def status_payload() -> dict:
+            now = time.time()
+            return {
+                "ok": True,
+                "uptime_s": int(now - started_at),
+                "matrix_connected": bool(
+                    last_sync["ts"] and now - last_sync["ts"] < 120
+                ),
+                "signal_enabled": signal_enabled,
+                "signal_connected": signal_state["connected"],
+                "voice": whisper_model_name if voice_enabled else "off",
+                "confirm_destructive": confirm_destructive,
+                "next_briefing": briefing_next["iso"],
+                "runs_total": len(run_history),
+                "last_run": run_history[0] if run_history else None,
+                "lang": lang,
+            }
+
+        async def handle_status(request: web.Request) -> web.Response:
+            token = request.headers.get("X-Token") or request.query.get("token")
+            if token != webhook_token:
+                return web.Response(status=401, text="bad token")
+            wants_html = "text/html" in request.headers.get("Accept", "")
+            if request.query.get("format") == "json" or not wants_html:
+                return web.json_response(status_payload())
+            p = status_payload()
+
+            def fmt_uptime(s: int) -> str:
+                d, rem = divmod(s, 86400)
+                h, rem = divmod(rem, 3600)
+                m = rem // 60
+                return f"{d}d {h}h {m}m" if d else f"{h}h {m}m"
+
+            def badge(up: bool, on_text="connected", off_text="disconnected") -> str:
+                return (
+                    f'<span class="ok">● {on_text}</span>'
+                    if up
+                    else f'<span class="bad">● {off_text}</span>'
+                )
+
+            runs_html = "".join(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{} s</td><td>{}</td></tr>".format(
+                    html.escape(r["time"]),
+                    html.escape(r["via"]),
+                    "✅" if r["ok"] else "❌",
+                    r["duration_s"],
+                    html.escape(r["prompt"]),
+                )
+                for r in run_history
+            ) or '<tr><td colspan="5" class="muted">none yet</td></tr>'
+            page = STATUS_PAGE.format(
+                cls="ok" if p["matrix_connected"] else "bad",
+                state="online" if p["matrix_connected"] else "degraded",
+                uptime=fmt_uptime(p["uptime_s"]),
+                matrix=badge(p["matrix_connected"]),
+                signal=badge(p["signal_connected"]) if signal_enabled else "off",
+                voice=html.escape(p["voice"]),
+                confirm="on" if confirm_destructive else "off",
+                briefing=html.escape(p["next_briefing"] or "off"),
+                runs=runs_html,
+                logs=html.escape("\n".join(list(LOG_BUFFER)[-100:])),
+            )
+            return web.Response(text=page, content_type="text/html")
+
         app = web.Application()
         app.router.add_post("/notify", handle_notify)
+        app.router.add_get("/status", handle_status)
         webhook_runner = web.AppRunner(app)
         await webhook_runner.setup()
         await web.TCPSite(webhook_runner, "0.0.0.0", webhook_port).start()
-        log.info("Webhook listening on :%d/notify", webhook_port)
+        log.info("Webhook + status listening on :%d", webhook_port)
     elif webhook_port:
         log.warning("WEBHOOK_PORT set but WEBHOOK_TOKEN missing — webhook disabled.")
 
@@ -764,6 +908,7 @@ async def main() -> None:
                     target_dt = now.replace(hour=bh, minute=bm, second=0, microsecond=0)
                     if target_dt <= now:
                         target_dt += timedelta(days=1)
+                    briefing_next["iso"] = target_dt.isoformat(timespec="minutes")
                     log.info("Next briefing at %s", target_dt.isoformat())
                     await asyncio.sleep((target_dt - now).total_seconds())
                     targets = notify_targets()
