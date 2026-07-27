@@ -53,7 +53,8 @@ signal:
   enabled: false
   image:
     repository: bbernhard/signal-cli-rest-api
-    tag: "0.100"
+    # Rootless variant so the sidecar doesn't run as root.
+    tag: "0.100-rootless"
   persistence:
     size: 1Gi
     storageClass: ""
@@ -63,6 +64,8 @@ resources:
     cpu: 100m
     memory: 512Mi
   limits:
+    cpu: "2"
+    # Whisper transcription peaks well above idle usage.
     memory: 2Gi
 
 nodeSelector: {}

@@ -544,7 +544,13 @@ async def main() -> None:
             content=content,
             ignore_unverified_devices=True,
         )
-        log.info("Posted %s (%s, %d bytes) to %s", path.name, mime, size, room_id)
+        log.info(
+            "Posted %s (%s, %d bytes) to %s",
+            loggable(path.name, 100),
+            mime,
+            size,
+            room_id,
+        )
 
     async def flush_outbox(targets: list[Target]) -> None:
         for path in sorted(OUTBOX_DIR.iterdir()):
@@ -558,7 +564,11 @@ async def main() -> None:
                     else:
                         await signal_send_file(dest, path)
                 except Exception:
-                    log.exception("Failed to post outbox file %s to %s", path.name, target)
+                    log.exception(
+                        "Failed to post outbox file %s to %s",
+                        loggable(path.name, 100),
+                        target,
+                    )
             try:
                 path.unlink()
             except OSError:

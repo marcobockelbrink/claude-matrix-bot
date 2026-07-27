@@ -36,6 +36,11 @@ spec:
         app.kubernetes.io/component: signal
     spec:
       securityContext:
+        # Rootless image variant runs as uid 1000.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -43,6 +48,9 @@ spec:
           image: "{{ .Values.signal.image.repository }}:{{ .Values.signal.image.tag }}"
           securityContext:
             allowPrivilegeEscalation: false
+            # If signal-cli fails to start, drop this line first — the
+            # upstream image is third-party and not tested read-only here.
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
           resources:
@@ -62,10 +70,14 @@ spec:
           volumeMounts:
             - name: signal-data
               mountPath: /home/.local/share/signal-cli
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: signal-data
           persistentVolumeClaim:
             claimName: {{ include "ha-matrix-bot.fullname" . }}-signal
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
