@@ -13,3 +13,20 @@ services:
       # Agent memory, bot state, and the Whisper model cache.
       - ./data:/app/data
     restart: unless-stopped
+
+  # Optional Signal channel — start with: docker compose --profile signal up -d
+  # (or set COMPOSE_PROFILES=signal in your shell/.env). Also set the SIGNAL_*
+  # variables in .env so the bot actually uses it.
+  signal:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: signal-api
+    profiles: ["signal"]
+    environment:
+      # json-rpc mode enables the websocket receive endpoint the bot uses.
+      - MODE=json-rpc
+    ports:
+      # Local-only: needed once for registering/linking the bot's number.
+      - "127.0.0.1:8380:8080"
+    volumes:
+      - ./signal-data:/home/.local/share/signal-cli
+    restart: unless-stopped

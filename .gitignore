@@ -13,3 +13,7 @@ venv/
 
 # Claude Code
 .claude/settings.local.json
+
+# Signal account state (keys, registration)
+signal-data/
+data/

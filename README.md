@@ -33,6 +33,8 @@ do from a Claude Code session, reachable wherever your phone has signal.
   (or 👍/👎 reaction) from you in the chat.
 - **Bilingual** — bot UI strings in German or English (`BOT_LANG`); the agent always mirrors
   the language you write in.
+- **Multi-user & optional Signal channel** — allowlist several Matrix users (family), and/or
+  enable Signal as a second chat surface via a `signal-cli-rest-api` sidecar.
 
 ## How it works
 
@@ -106,6 +108,45 @@ gathers context.
 The `store/` directory (created next to the compose file, mounted into the container) holds the
 bot's Matrix device identity and encryption keys — keep it around so the bot doesn't re-key on
 every restart.
+
+## Optional: Signal as a second channel
+
+If (part of) the family prefers Signal over Element, the bot can serve both at once. The
+Signal side runs as a sidecar container ([signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api))
+with its own dedicated phone number (a prepaid SIM you use once for registration is fine).
+
+1. **Start the sidecar** (it's behind a compose profile, so it's off by default):
+
+   ```bash
+   docker compose --profile signal up -d
+   ```
+
+2. **Register the bot's number** (one-time). The API is exposed on `127.0.0.1:8380`:
+
+   ```bash
+   # Request SMS verification (if it fails with a captcha error, solve one at
+   # https://signalcaptchas.org/registration/generate.html and pass it along):
+   curl -X POST http://127.0.0.1:8380/v1/register/+49XXXXXXXXX
+   curl -X POST http://127.0.0.1:8380/v1/register/+49XXXXXXXXX \
+     -H 'Content-Type: application/json' -d '{"captcha": "<token>"}'
+
+   # Confirm with the SMS code:
+   curl -X POST http://127.0.0.1:8380/v1/register/+49XXXXXXXXX/verify/<code>
+   ```
+
+3. **Configure the bot** in `.env` and restart it:
+
+   ```bash
+   SIGNAL_API_URL=http://signal:8080
+   SIGNAL_NUMBER=+49XXXXXXXXX
+   SIGNAL_ALLOWED_NUMBERS=+49...,+49...   # family members' numbers
+   SIGNAL_NOTIFY=+49...                   # or group.<id>, for briefing/webhook pushes
+   ```
+
+Family members then simply message the bot's number on Signal (or you add the bot to a
+Signal group — group ids via `GET /v1/groups/<SIGNAL_NUMBER>`). Voice messages, images from
+the agent, and destructive-command confirmations all work on Signal too. Registration state
+lives in `signal-data/` (gitignored) — keep it, or you'll have to re-register.
 
 ## Hooking up Home Assistant notifications
 
