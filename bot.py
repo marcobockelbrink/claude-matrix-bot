@@ -224,7 +224,10 @@ def chunk(text: str, size: int = CHUNK_CHARS):
 
 def loggable(text: str, limit: int = 200) -> str:
     """Flatten untrusted text so it can't forge extra log lines."""
-    flat = re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()
+    # Line breaks are stripped explicitly (not just via the control-char
+    # regex) so static analysis recognises this as the sanitizer it is.
+    flat = str(text).replace("\r", " ").replace("\n", " ")
+    flat = re.sub(r"[\x00-\x1f\x7f]+", " ", flat).strip()
     return flat[:limit] + ("…" if len(flat) > limit else "")
 
 
