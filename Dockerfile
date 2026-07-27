@@ -1,22 +1,36 @@
-FROM python:3.14-slim
+# ── Build stage ───────────────────────────────────────────────────────────
+# Compiles the wheels that have no prebuilt distribution (python-olm for
+# matrix-nio[e2e]); the toolchain stays out of the runtime image.
+FROM python:3.14-slim AS builder
 
-# System deps:
-#  - libolm-dev + gcc: build/runtime for matrix-nio[e2e] (python-olm)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        libc6-dev \
+        libolm-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+
+# ── Runtime stage ─────────────────────────────────────────────────────────
+# No compiler, no headers — only what the bot needs at run time:
+#  - libolm3: E2E encryption for matrix-nio
 #  - curl + ca-certificates: how the agent's Bash tool talks to the HA HTTP API
 #  - git: some Agent SDK tools expect it on PATH
+FROM python:3.14-slim
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libolm-dev \
-        gcc \
+        libolm3 \
         curl \
         ca-certificates \
         git \
     && rm -rf /var/lib/apt/lists/*
 
+COPY --from=builder /install /usr/local
+
 WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
 COPY bot.py system_prompt.md ./
 
 # The Agent SDK's bypassPermissions mode refuses to run as root — use an
@@ -36,5 +50,9 @@ ENV HF_HOME=/app/data/hf
 
 # Persist the Matrix E2E store (device keys, sync token) across restarts.
 VOLUME ["/app/store"]
+
+# Liveness of the Matrix sync loop (only meaningful when WEBHOOK_PORT is set).
+HEALTHCHECK --interval=60s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${WEBHOOK_PORT:-8321}/healthz" || exit 1
 
 CMD ["python", "bot.py"]

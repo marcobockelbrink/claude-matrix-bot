@@ -35,9 +35,23 @@ spec:
         {{- include "ha-matrix-bot.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: signal
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: signal
           image: "{{ .Values.signal.image.repository }}:{{ .Values.signal.image.tag }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
           env:
             # json-rpc mode enables the websocket receive endpoint.
             - name: MODE

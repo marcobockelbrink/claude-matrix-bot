@@ -222,6 +222,12 @@ def chunk(text: str, size: int = CHUNK_CHARS):
         yield text[i : i + size]
 
 
+def loggable(text: str, limit: int = 200) -> str:
+    """Flatten untrusted text so it can't forge extra log lines."""
+    flat = re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()
+    return flat[:limit] + ("…" if len(flat) > limit else "")
+
+
 def load_state() -> dict:
     try:
         return json.loads(STATE_FILE.read_text())
@@ -657,7 +663,10 @@ async def main() -> None:
         if event.server_timestamp < start_ms:
             return False  # replayed history
         if event.sender not in allowed_users:
-            log.warning("Ignoring event from non-allowlisted sender %s", event.sender)
+            log.warning(
+                "Ignoring event from non-allowlisted sender %s",
+                loggable(event.sender, 80),
+            )
             return False
         return True
 
@@ -677,14 +686,19 @@ async def main() -> None:
             await matrix_send(room.room_id, S["confirm_hint"])
         if outcome:
             return
-        log.info("Message from %s in %s: %s", event.sender, room.room_id, body)
+        log.info(
+            "Message from %s in %s: %s",
+            loggable(event.sender, 80),
+            room.room_id,
+            loggable(body),
+        )
         asyncio.create_task(run_agent([("matrix", room.room_id)], body))
 
     async def on_audio(room: MatrixRoom, event) -> None:
         if not is_relevant(event) or not voice_enabled:
             return
         remember_room(room.room_id)
-        log.info("Voice message from %s in %s", event.sender, room.room_id)
+        log.info("Voice message from %s in %s", loggable(event.sender, 80), room.room_id)
         asyncio.create_task(handle_matrix_voice(room, event))
 
     async def on_unknown(room: MatrixRoom, event: UnknownEvent) -> None:
@@ -705,10 +719,12 @@ async def main() -> None:
 
     async def on_invite(room: MatrixRoom, event: InviteMemberEvent) -> None:
         if event.sender not in allowed_users:
-            log.warning("Ignoring invite from %s", event.sender)
+            log.warning("Ignoring invite from %s", loggable(event.sender, 80))
             return
         await matrix.join(room.room_id)
-        log.info("Joined room %s (invited by %s)", room.room_id, event.sender)
+        log.info(
+            "Joined room %s (invited by %s)", room.room_id, loggable(event.sender, 80)
+        )
 
     async def on_sync(_response: SyncResponse) -> None:
         last_sync["ts"] = time.time()
@@ -728,7 +744,10 @@ async def main() -> None:
             return
         if sender not in signal_allowed:
             if sender:
-                log.warning("Ignoring Signal message from non-allowlisted %s", sender)
+                log.warning(
+                    "Ignoring Signal message from non-allowlisted %s",
+                    loggable(sender, 40),
+                )
             return
         group_id = (dm.get("groupInfo") or {}).get("groupId")
         recipient = f"group.{group_id}" if group_id else sender
@@ -751,7 +770,7 @@ async def main() -> None:
         )
         if voice_att and voice_enabled:
             att_id = voice_att.get("id")
-            log.info("Signal voice message from %s", sender)
+            log.info("Signal voice message from %s", loggable(sender, 40))
             async with http.get(f"{signal_api}/v1/attachments/{quote(att_id)}") as resp:
                 if resp.status >= 400:
                     log.error("Signal attachment download failed (%d)", resp.status)
@@ -766,7 +785,9 @@ async def main() -> None:
             return
 
         if text:
-            log.info("Signal message from %s: %s", sender, text)
+            log.info(
+                "Signal message from %s: %s", loggable(sender, 40), loggable(text)
+            )
             asyncio.create_task(run_agent([target], text))
 
     async def signal_loop() -> None:
@@ -897,9 +918,19 @@ async def main() -> None:
             )
             return web.Response(text=page, content_type="text/html")
 
+        async def handle_health(_request: web.Request) -> web.Response:
+            # Unauthenticated on purpose (container/k8s probes), so it must not
+            # leak anything: liveness of the sync loop, nothing else.
+            alive = bool(last_sync["ts"] and time.time() - last_sync["ts"] < 300)
+            return web.json_response(
+                {"status": "ok" if alive else "degraded"},
+                status=200 if alive else 503,
+            )
+
         app = web.Application()
         app.router.add_post("/notify", handle_notify)
         app.router.add_get("/status", handle_status)
+        app.router.add_get("/healthz", handle_health)
         webhook_runner = web.AppRunner(app)
         await webhook_runner.setup()
         await web.TCPSite(webhook_runner, "0.0.0.0", webhook_port).start()

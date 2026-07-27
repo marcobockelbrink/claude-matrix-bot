@@ -277,4 +277,11 @@ sealed-secrets / SOPS). See `deploy/helm/ha-matrix-bot/values.yaml` for all opti
 `ClaudeSDKClient` on the other. `system_prompt.md` is the Home Assistant runbook fed to the
 agent.
 
+**Container image.** Multi-stage build on `python:3.14-slim`: the builder compiles the wheels
+that need a toolchain (python-olm), the runtime stage ships only `libolm3`, `curl`, `git` and
+the installed packages — no compiler. **Alpine was evaluated and rejected**: `ctranslate2`
+(the engine behind faster-whisper) publishes no musl wheels at all, so voice transcription
+would have to be dropped or the whole C++ engine built from source. Don't retry without
+solving that first.
+
 🤖 Built with [Claude Code](https://claude.com/claude-code)

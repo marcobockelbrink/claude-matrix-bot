@@ -32,9 +32,23 @@ spec:
       labels:
         app.kubernetes.io/name: ha-matrix-bot-signal
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: signal
-          image: bbernhard/signal-cli-rest-api:latest
+          image: bbernhard/signal-cli-rest-api:0.100
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
           env:
             # json-rpc mode enables the websocket receive endpoint.
             - name: MODE

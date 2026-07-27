@@ -2,8 +2,8 @@ apiVersion: v2
 name: ha-matrix-bot
 description: Matrix/Signal chat bot operating a Home Assistant instance via the Claude Agent SDK
 type: application
-version: 0.1.0
-appVersion: "latest"
+version: 0.2.0
+appVersion: "v0.5.0"
 home: https://github.com/marcobockelbrink/claude-matrix-bot
 sources:
   - https://github.com/marcobockelbrink/claude-matrix-bot

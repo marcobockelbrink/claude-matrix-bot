@@ -49,10 +49,21 @@ spec:
     spec:
       securityContext:
         # Image runs as uid 1000 ("bot"); make the PVCs writable for it.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: bot
-          image: ghcr.io/marcobockelbrink/claude-matrix-bot:latest
+          # Pin a release tag; :latest makes rollouts unreproducible.
+          image: ghcr.io/marcobockelbrink/claude-matrix-bot:v0.5.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
           envFrom:
             - secretRef:
                 name: ha-matrix-bot
@@ -72,16 +83,31 @@ spec:
           ports:
             - name: http
               containerPort: 8321
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            failureThreshold: 3
           volumeMounts:
             - name: store
               mountPath: /app/store
             - name: data
               mountPath: /app/data
+            # Writable paths needed despite the read-only root filesystem.
+            - name: outbox
+              mountPath: /app/outbox
+            - name: home
+              mountPath: /home/bot
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 100m
               memory: 512Mi
             limits:
+              cpu: "2"
               # Whisper transcription peaks well above idle usage.
               memory: 2Gi
       volumes:
@@ -91,6 +117,12 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: ha-matrix-bot-data
+        - name: outbox
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

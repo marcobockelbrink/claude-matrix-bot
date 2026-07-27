@@ -24,11 +24,21 @@ spec:
     spec:
       securityContext:
         # Image runs as uid 1000 ("bot"); make the PVCs writable for it.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: bot
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
           envFrom:
             - secretRef:
                 name: {{ include "ha-matrix-bot.secretName" . }}
@@ -56,11 +66,25 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.config.webhookPort }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            failureThreshold: 3
           volumeMounts:
             - name: store
               mountPath: /app/store
             - name: data
               mountPath: /app/data
+            # Writable paths needed despite the read-only root filesystem.
+            - name: outbox
+              mountPath: /app/outbox
+            - name: home
+              mountPath: /home/bot
+            - name: tmp
+              mountPath: /tmp
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -72,6 +96,12 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "ha-matrix-bot.fullname" . }}-data
+        - name: outbox
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
