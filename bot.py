@@ -54,6 +54,7 @@ from nio import (
     SyncResponse,
     UnknownEvent,
     UploadResponse,
+    WhoamiResponse,
 )
 from nio.crypto.attachments import decrypt_attachment
 
@@ -132,6 +133,9 @@ STORE_PATH = "./store"
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 OUTBOX_DIR = Path(os.environ.get("OUTBOX_DIR", "/app/outbox"))
 STATE_FILE = DATA_DIR / "state.json"
+# Matrix session (device id + access token) so restarts reuse one device
+# instead of piling up a new "unverified device" on every start.
+SESSION_FILE = DATA_DIR / "matrix_session.json"
 # Matrix events tolerate large bodies, but keep chunks well under any server cap.
 CHUNK_CHARS = 4000
 CONFIRM_TIMEOUT_S = 180
@@ -243,6 +247,29 @@ def save_state(state: dict) -> None:
         STATE_FILE.write_text(json.dumps(state))
     except OSError:
         log.exception("Could not persist state file")
+
+
+def load_session() -> dict | None:
+    try:
+        return json.loads(SESSION_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def save_session(client: AsyncClient) -> None:
+    try:
+        SESSION_FILE.write_text(
+            json.dumps(
+                {
+                    "user_id": client.user_id,
+                    "device_id": client.device_id,
+                    "access_token": client.access_token,
+                }
+            )
+        )
+        SESSION_FILE.chmod(0o600)  # holds an access token
+    except OSError:
+        log.exception("Could not persist Matrix session")
 
 
 async def main() -> None:
@@ -421,12 +448,33 @@ async def main() -> None:
         config=AsyncClientConfig(store_sync_tokens=True, encryption_enabled=True),
     )
 
-    login = await matrix.login(matrix_password, device_name="ha-matrix-bot")
-    if not isinstance(login, LoginResponse):
-        log.error("Matrix login failed: %s", login)
-        await claude.disconnect()
-        sys.exit(1)
-    log.info("Logged in to Matrix as %s (device %s).", matrix.user_id, matrix.device_id)
+    # Reuse the stored session if it's still valid — a fresh password login
+    # would register yet another device the owner has to verify in their client.
+    session = load_session()
+    restored = False
+    if session and session.get("user_id") == matrix_user:
+        matrix.restore_login(**session)
+        if isinstance(await matrix.whoami(), WhoamiResponse):
+            restored = True
+            log.info(
+                "Restored Matrix session as %s (device %s).",
+                matrix.user_id,
+                matrix.device_id,
+            )
+        else:
+            log.warning("Stored Matrix session rejected — logging in again.")
+            matrix.access_token = ""
+
+    if not restored:
+        login = await matrix.login(matrix_password, device_name="ha-matrix-bot")
+        if not isinstance(login, LoginResponse):
+            log.error("Matrix login failed: %s", login)
+            await claude.disconnect()
+            sys.exit(1)
+        save_session(matrix)
+        log.info(
+            "Logged in to Matrix as %s (device %s).", matrix.user_id, matrix.device_id
+        )
 
     if matrix.should_upload_keys:
         await matrix.keys_upload()
