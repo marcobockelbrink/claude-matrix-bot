@@ -139,6 +139,9 @@ SESSION_FILE = DATA_DIR / "matrix_session.json"
 # Matrix events tolerate large bodies, but keep chunks well under any server cap.
 CHUNK_CHARS = 4000
 CONFIRM_TIMEOUT_S = 180
+# A wedged agent run holds the serial lock, which would silently swallow every
+# later message — cap it instead.
+AGENT_TIMEOUT_S = int(os.environ.get("AGENT_TIMEOUT_S") or 900)
 
 # A delivery target is ("matrix", room_id) or ("signal", recipient) where a
 # Signal recipient is a phone number or "group.<base64 id>".
@@ -173,6 +176,7 @@ STRINGS = {
         ),
         "confirm_hint": "Bitte mit **ja** oder **nein** antworten (oder 👍/👎).",
         "confirm_timeout": "⏱️ Keine Bestätigung erhalten — Befehl wurde NICHT ausgeführt.",
+        "agent_timeout": "⏱️ Der Agent hat zu lange gebraucht und wurde abgebrochen. Bitte nochmal versuchen.",
         "denied": "Der Besitzer hat diesen Befehl im Chat abgelehnt.",
         "notify_prefix": "🔔 ",
         "yes": ("ja", "yes", "ok", "okay", "mach", "👍"),
@@ -190,6 +194,7 @@ STRINGS = {
         ),
         "confirm_hint": "Please reply **yes** or **no** (or 👍/👎).",
         "confirm_timeout": "⏱️ No confirmation received — the command was NOT run.",
+        "agent_timeout": "⏱️ The agent took too long and was aborted. Please try again.",
         "denied": "The owner declined this command in chat.",
         "notify_prefix": "🔔 ",
         "yes": ("yes", "ja", "ok", "okay", "do it", "👍"),
@@ -636,7 +641,8 @@ async def main() -> None:
             parts: list[str] = []
             t0 = time.time()
             ok = True
-            try:
+
+            async def collect() -> None:
                 await claude.query(prompt)
                 async for message in claude.receive_response():
                     if isinstance(message, AssistantMessage):
@@ -646,6 +652,14 @@ async def main() -> None:
                     elif isinstance(message, ResultMessage):
                         if message.subtype and message.subtype != "success":
                             log.warning("Agent turn ended: %s", message.subtype)
+
+            try:
+                await asyncio.wait_for(collect(), AGENT_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                ok = False
+                log.error("Agent run timed out after %ds — aborting", AGENT_TIMEOUT_S)
+                await deliver(targets[0], S["agent_timeout"])
+                return
             except Exception:
                 ok = False
                 log.exception("Agent run failed")
@@ -998,7 +1012,9 @@ async def main() -> None:
         app.router.add_post("/notify", handle_notify)
         app.router.add_get("/status", handle_status)
         app.router.add_get("/healthz", handle_health)
-        webhook_runner = web.AppRunner(app)
+        # No access log: the status page polls every 15s and would otherwise
+        # flood the ring buffer shown on that very page (and log the token).
+        webhook_runner = web.AppRunner(app, access_log=None)
         await webhook_runner.setup()
         await web.TCPSite(webhook_runner, "0.0.0.0", webhook_port).start()
         log.info("Webhook + status listening on :%d", webhook_port)
