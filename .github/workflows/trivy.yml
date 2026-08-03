@@ -24,7 +24,7 @@ jobs:
           scanners: vuln,misconfig,secret
           format: sarif
           output: trivy-fs.sarif
-      - uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+      - uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
@@ -49,7 +49,7 @@ jobs:
           # Debian base-image CVEs without an available fix are noise we can't
           # act on — surface only fixable findings in the Security tab.
           ignore-unfixed: true
-      - uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+      - uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
