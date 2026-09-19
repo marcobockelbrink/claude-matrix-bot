@@ -1,6 +1,7 @@
-# Code review on the self-hosted runner (Mac): SonarQube scan + review by a local Qwen model (oMLX).
+# Code review on the self-hosted runner (Mac): SonarQube scan + review by Claude Code.
 # Setup: README in ~/Projekte/sonarqube-server on the runner machine.
-# Needs: secret SONAR_TOKEN, a runner labelled "code-review", sonar-project.properties in the repo root.
+# Needs: secrets SONAR_TOKEN and CLAUDE_CODE_OAUTH_TOKEN, the Claude GitHub App installed,
+# a runner labelled "code-review", sonar-project.properties in the repo root.
 name: Code-Review
 
 on:
@@ -38,7 +39,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: http://localhost:9000
 
-  qwen-review:
+  claude-review:
     runs-on: [self-hosted, macOS, code-review]
     if: >
       github.event_name == 'pull_request' && !github.event.pull_request.draft &&
@@ -47,8 +48,44 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      id-token: write # auth for the Claude GitHub App (comments show up as claude[bot])
     steps:
-      - name: Qwen review (local LLM via oMLX)
-        run: /usr/bin/python3 "$HOME/Projekte/sonarqube-server/qwen-review/review.py"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # so Claude can read callers, tests and history
+
+      - name: Claude-Review
+        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR: ${{ github.event.pull_request.number }}
+
+            Review diesen Pull Request als erfahrener Senior-Engineer. Antworte auf Deutsch.
+            Der Code ist ausgecheckt: Lies bei Bedarf ganze Dateien, Aufrufer und Tests und beachte CLAUDE.md.
+
+            Worauf du achtest:
+            - Bugs und Logikfehler, falsche Randfälle, None/null-Zugriffe
+            - Sicherheit: Injection, fehlende Auth-/Rechteprüfung, Geheimnisse, unsichere Eingaben
+            - Fehlerbehandlung: verschluckte Fehler, falsche Fallbacks
+            - Nebenläufigkeit, Ressourcenlecks, offensichtliche Performance-Fallen
+            - Riskante Änderungen ohne passende Tests
+
+            Was du NICHT tust:
+            - Keine Stil- oder Formatierungshinweise; SonarQube läuft im selben Workflow.
+            - Nichts über externe Tools, Versionen, Release-Namen oder CLI-Optionen behaupten,
+              das du nicht mit `gh api` oder einer Websuche geprüft hast.
+            - Bewusst dokumentierte Entscheidungen (Code-Kommentare, CLAUDE.md) sind keine Befunde.
+            - Lieber wenige echte Befunde als viele vermutete.
+
+            Ausgabe:
+            - Jeden konkreten Befund als Inline-Kommentar an der betroffenen Zeile,
+              beginnend mit **hoch**, **mittel** oder **niedrig**, mit konkretem Vorschlag.
+            - Zum Schluss eine kurze Zusammenfassung als PR-Kommentar mit
+              `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body "..."`,
+              damit bei jedem Push derselbe Kommentar aktualisiert wird.
+              Ohne Befunde lautet die Zusammenfassung nur: Keine Befunde.
+          claude_args: |
+            --model claude-sonnet-5
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Read,Grep,Glob,WebFetch,WebSearch"
