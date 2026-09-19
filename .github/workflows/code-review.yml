@@ -1,0 +1,54 @@
+# Code review on the self-hosted runner (Mac): SonarQube scan + review by a local Qwen model (oMLX).
+# Setup: README in ~/Projekte/sonarqube-server on the runner machine.
+# Needs: secret SONAR_TOKEN, a runner labelled "code-review", sonar-project.properties in the repo root.
+name: Code-Review
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# A new push to the same PR cancels the outdated run (the runner is a single Mac)
+concurrency:
+  group: code-review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sonarqube:
+    runs-on: [self-hosted, macOS, code-review]
+    # No PRs from forks: they would run foreign code on the Mac
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history for blame / "new code" detection
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
+        with:
+          # The branch plugin needs the head SHA on GitHub PRs, otherwise the comment does not reach the PR
+          args: >
+            ${{ github.event_name == 'pull_request' && format('-Dsonar.scm.revision={0}', github.event.pull_request.head.sha) || '' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: http://localhost:9000
+
+  qwen-review:
+    runs-on: [self-hosted, macOS, code-review]
+    if: >
+      github.event_name == 'pull_request' && !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Qwen review (local LLM via oMLX)
+        run: /usr/bin/python3 "$HOME/Projekte/sonarqube-server/qwen-review/review.py"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
