@@ -63,29 +63,48 @@ jobs:
             PR: ${{ github.event.pull_request.number }}
 
             Review diesen Pull Request als erfahrener Senior-Engineer. Antworte auf Deutsch.
-            Der Code ist ausgecheckt: Lies bei Bedarf ganze Dateien, Aufrufer und Tests und beachte CLAUDE.md.
 
-            Worauf du achtest:
-            - Bugs und Logikfehler, falsche Randfälle, None/null-Zugriffe
-            - Sicherheit: Injection, fehlende Auth-/Rechteprüfung, Geheimnisse, unsichere Eingaben
-            - Fehlerbehandlung: verschluckte Fehler, falsche Fallbacks
-            - Nebenläufigkeit, Ressourcenlecks, offensichtliche Performance-Fallen
-            - Riskante Änderungen ohne passende Tests
+            **1. Erst Kontext, dann Urteil.** Lies `CLAUDE.md` und vorhandene Beitragsregeln,
+            dann Titel, Beschreibung und verlinkte Issues des PRs. Der Code ist ausgecheckt:
+            Lies die geänderten Dateien ganz, nicht nur die Diff-Ausschnitte, dazu Aufrufer und Tests.
 
-            Was du NICHT tust:
-            - Keine Stil- oder Formatierungshinweise; SonarQube läuft im selben Workflow.
-            - Nichts über externe Tools, Versionen, Release-Namen oder CLI-Optionen behaupten,
-              das du nicht mit `gh api` oder einer Websuche geprüft hast.
-            - Bewusst dokumentierte Entscheidungen (Code-Kommentare, CLAUDE.md) sind keine Befunde.
-            - Lieber wenige echte Befunde als viele vermutete.
+            **2. Prüfliste.** Geh diese sieben Kategorien durch:
+            | Kategorie | Worauf |
+            |---|---|
+            | Korrektheit | Logikfehler, Off-by-one, None/null, Randfälle, Wettläufe |
+            | Typsicherheit | falsche Typen, unsichere Casts, `any`, fehlende Prüfungen |
+            | Projektmuster | Weicht die Änderung von den Konventionen des Repos ab (Benennung, Fehlerbehandlung, Aufbau)? |
+            | Sicherheit | Injection, fehlende Auth-/Rechteprüfung, Geheimnisse, Path Traversal, SSRF |
+            | Performance | N+1-Abfragen, fehlende Indizes, unbegrenzte Schleifen, Speicherlecks |
+            | Vollständigkeit | fehlende Tests, fehlende Fehlerbehandlung, halbe Migrationen |
+            | Wartbarkeit | toter Code, magische Zahlen, tiefe Verschachtelung, unklare Benennung |
 
-            Ausgabe:
-            - Jeden konkreten Befund als Inline-Kommentar an der betroffenen Zeile,
-              beginnend mit **hoch**, **mittel** oder **niedrig**, mit konkretem Vorschlag.
-            - Zum Schluss eine kurze Zusammenfassung als PR-Kommentar mit
+            **3. Schweregrade.** Jeder Befund bekommt genau einen:
+            - `kritisch` – Sicherheitslücke oder Datenverlust. Vor dem Merge beheben.
+            - `hoch` – Bug oder Logikfehler, der im Betrieb auffallen wird. Sollte vor dem Merge weg.
+            - `mittel` – Qualitätsmangel, Behebung empfohlen.
+            - `niedrig` – Kleinigkeit, optional.
+
+            **4. Sonderfälle.**
+            - Nur Doku oder Konfiguration geändert: leichteres Review, Schwerpunkt Korrektheit.
+            - Mehr als 50 Dateien: zuerst Quellcode, dann Tests, zuletzt Konfiguration.
+            - Abhängigkeits-Updates: Changelog der neuen Fassung ansehen und auf Breaking Changes prüfen.
+
+            **5. Was du nicht tust.**
+            - Keine Stil- oder Formatierungshinweise und nichts, was ein Linter findet. SonarQube läuft im selben Workflow und meldet das regelbasiert.
+            - Keine Tests, Builds oder Typprüfungen ausführen. Das erledigt ein eigener CI-Auftrag.
+            - Nichts über Versionen, Release-Namen, Paketnamen oder CLI-Optionen behaupten, das du nicht
+              mit `gh api` oder einer Websuche geprüft hast. Dein Wissen dazu ist veraltet.
+            - Bewusst dokumentierte Entscheidungen (Code-Kommentare, `CLAUDE.md`) sind keine Befunde.
+            - Lieber drei echte Befunde als zehn vermutete.
+
+            **6. Ausgabe.**
+            - Jeden Befund als Inline-Kommentar an der betroffenen Zeile, beginnend mit
+              **kritisch**, **hoch**, **mittel** oder **niedrig**, mit konkretem Vorschlag.
+            - Zum Schluss eine Zusammenfassung als PR-Kommentar mit
               `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body "..."`,
-              damit bei jedem Push derselbe Kommentar aktualisiert wird.
-              Ohne Befunde lautet die Zusammenfassung nur: Keine Befunde.
+              damit bei jedem Push derselbe Kommentar aktualisiert wird. Darin: ein Satz Gesamturteil
+              und die Zahl der Befunde je Schweregrad. Ohne Befunde nur: Keine Befunde.
           claude_args: |
             --model claude-sonnet-5
             --setting-sources project
