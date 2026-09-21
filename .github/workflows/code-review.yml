@@ -58,6 +58,10 @@ jobs:
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Without track_progress the action posts no comment in automation mode:
+          # the review only reached the job summary and the PR stayed silent.
+          # With it the action keeps one comment and updates it as it goes.
+          track_progress: true
           prompt: |
             REPO: ${{ github.repository }}
             PR: ${{ github.event.pull_request.number }}
@@ -101,11 +105,11 @@ jobs:
             **6. Ausgabe.**
             - Jeden Befund als Inline-Kommentar an der betroffenen Zeile, beginnend mit
               **kritisch**, **hoch**, **mittel** oder **niedrig**, mit konkretem Vorschlag.
-            - Zum Schluss eine Zusammenfassung als PR-Kommentar mit
-              `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body "..."`,
-              damit bei jedem Push derselbe Kommentar aktualisiert wird. Darin: ein Satz Gesamturteil
-              und die Zahl der Befunde je Schweregrad. Ohne Befunde nur: Keine Befunde.
+            - Zum Schluss **immer** eine Zusammenfassung in den Tracking-Kommentar schreiben
+              (`mcp__github_comment__update_claude_comment`): ein Satz Gesamturteil und die Zahl
+              der Befunde je Schweregrad. Auch wenn du nichts gefunden hast -- dann genau:
+              Keine Befunde. Ein stummer Lauf ist ein fehlgeschlagener Lauf.
           claude_args: |
             --model claude-sonnet-5
             --setting-sources project
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Read,Grep,Glob,WebFetch,WebSearch"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Read,Grep,Glob,WebFetch,WebSearch"
