@@ -58,6 +58,10 @@ jobs:
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # No track_progress: it switches the action into tag mode, which requires this
+          # file to be identical to the one on main -- a PR that changes it is then
+          # skipped without a word. In automation mode Claude posts the comment itself
+          # (see the instructions below).
           prompt: |
             REPO: ${{ github.repository }}
             PR: ${{ github.event.pull_request.number }}
@@ -101,10 +105,11 @@ jobs:
             **6. Ausgabe.**
             - Jeden Befund als Inline-Kommentar an der betroffenen Zeile, beginnend mit
               **kritisch**, **hoch**, **mittel** oder **niedrig**, mit konkretem Vorschlag.
-            - Zum Schluss eine Zusammenfassung als PR-Kommentar mit
-              `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body "..."`,
-              damit bei jedem Push derselbe Kommentar aktualisiert wird. Darin: ein Satz Gesamturteil
-              und die Zahl der Befunde je Schweregrad. Ohne Befunde nur: Keine Befunde.
+            - **Immer** zum Schluss eine Zusammenfassung an den PR schreiben, auch bei null Befunden:
+              `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body "..."`
+              (aktualisiert bei jedem Push denselben Kommentar). Inhalt: ein Satz Gesamturteil und
+              die Zahl der Befunde je Schweregrad, bei nichts Gefundenem genau: Keine Befunde.
+              Ein stummer Lauf ist ein fehlgeschlagener Lauf -- dieser Schritt darf nie entfallen.
           claude_args: |
             --model claude-sonnet-5
             --setting-sources project
