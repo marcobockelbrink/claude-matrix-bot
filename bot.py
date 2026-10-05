@@ -144,7 +144,7 @@ CONFIRM_TIMEOUT_S = 180
 # later message — cap it instead.
 AGENT_TIMEOUT_S = int(os.environ.get("AGENT_TIMEOUT_S") or 900)
 # How long an interrupted turn gets to wind down before the session is rebuilt.
-ABORT_DRAIN_TIMEOUT_S = 30
+ABORT_DRAIN_TIMEOUT_S = 60
 
 # A delivery target is ("matrix", room_id) or ("signal", recipient) where a
 # Signal recipient is a phone number or "group.<base64 id>".
