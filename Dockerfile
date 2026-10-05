@@ -21,18 +21,18 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 #  - git: some Agent SDK tools expect it on PATH
 FROM python:3.14-slim
 
-# upgrade: pick up Debian security fixes newer than the base image.
+# upgrade: pick up Debian package updates (security fixes included) that are
+# newer than the base image.
+# pip is removed: nothing installs packages at run time, and it bundles its own
+# copies of urllib3, msgpack and setuptools that only show up as scanner findings.
 RUN apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         libolm3 \
         curl \
         ca-certificates \
         git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Nothing installs packages at run time, and pip bundles its own copies of
-# urllib3, msgpack and setuptools that only show up as scanner findings.
-RUN python -m pip uninstall -y pip
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall -y pip
 
 COPY --from=builder /install /usr/local
 
