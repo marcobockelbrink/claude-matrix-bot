@@ -641,8 +641,10 @@ async def main() -> None:
                 pass
 
     # ── Agent runs ────────────────────────────────────────────────────────────
-    async def abort_turn() -> None:
-        """Stop a timed-out turn so it can't keep acting or bleed into the next."""
+    async def abort_turn() -> bool:
+        """Stop a timed-out turn so it can't keep acting or bleed into the next.
+
+        Returns False if the agent session could not be recovered."""
         # Cancelling our reader doesn't stop the turn itself: it would go on
         # running tools, and its leftover messages would be read as the reply
         # to the next prompt.
@@ -665,8 +667,9 @@ async def main() -> None:
                 await claude.disconnect()
                 await claude.connect()
             except Exception:
-                log.exception("Reconnecting the agent session failed — exiting")
-                fatal.set()
+                log.exception("Reconnecting the agent session failed")
+                return False
+        return True
 
     async def run_agent(
         targets: list[Target], prompt: str, announce: bool = True
@@ -695,10 +698,12 @@ async def main() -> None:
             except asyncio.TimeoutError:
                 ok = False
                 log.error("Agent run timed out after %ds — aborting", AGENT_TIMEOUT_S)
-                await abort_turn()
+                session_ok = await abort_turn()
                 await deliver(targets[0], S["agent_timeout"])
                 # Otherwise the aborted run's files would go to the next run's chat.
                 await flush_outbox(targets)
+                if not session_ok:
+                    fatal.set()
                 return
             except Exception:
                 ok = False
