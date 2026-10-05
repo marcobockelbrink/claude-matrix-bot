@@ -21,11 +21,15 @@ permissions:
 jobs:
   sonarqube:
     runs-on: [self-hosted, macOS, code-review]
-    # No PRs from forks: they would run foreign code on the Mac
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # No PRs from forks: they would run foreign code on the Mac.
+    # No Dependabot PRs: they get no Actions secrets, so the scan would only fail with 401.
+    if: >
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history for blame / "new code" detection
 
@@ -43,14 +47,15 @@ jobs:
     runs-on: [self-hosted, macOS, code-review]
     if: >
       github.event_name == 'pull_request' && !github.event.pull_request.draft &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
       id-token: write # auth for the Claude GitHub App (comments show up as claude[bot])
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # so Claude can read callers, tests and history
 
