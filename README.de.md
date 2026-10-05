@@ -106,7 +106,8 @@ In der `.env` ausfüllen:
 Optionale Funktionen (siehe Kommentare in `.env.example`): `BOT_LANG` (de/en),
 `WEBHOOK_TOKEN` (aktiviert den Benachrichtigungs-Webhook), `BRIEFING_TIME` (tägliches
 Briefing, z.B. `07:00`), `WHISPER_MODEL` (Sprachtranskription, `off` zum Deaktivieren),
-`CONFIRM_DESTRUCTIVE`.
+`CONFIRM_DESTRUCTIVE`, `RESTART_TIME` (täglicher Neustart, Standard `03:00`, `off` zum
+Deaktivieren).
 
 Die `.env` steht in der `.gitignore` — sie wird nie committet.
 
