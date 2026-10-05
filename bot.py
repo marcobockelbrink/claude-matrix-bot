@@ -450,6 +450,9 @@ async def main() -> None:
     # and it keeps the persistent session's turns from interleaving.
     agent_lock = asyncio.Lock()
     current_run: dict = {}
+    # Set when the agent session is beyond repair: the process exits and the
+    # container's restart policy starts a fresh one.
+    fatal = asyncio.Event()
 
     # ── Matrix client (end-to-end encrypted) ──────────────────────────────────
     os.makedirs(STORE_PATH, exist_ok=True)
@@ -662,7 +665,8 @@ async def main() -> None:
                 await claude.disconnect()
                 await claude.connect()
             except Exception:
-                log.exception("Reconnecting the agent session failed")
+                log.exception("Reconnecting the agent session failed — exiting")
+                fatal.set()
 
     async def run_agent(
         targets: list[Target], prompt: str, announce: bool = True
@@ -1123,15 +1127,16 @@ async def main() -> None:
     sync_task = asyncio.create_task(
         matrix.sync_forever(timeout=30000, full_state=True)
     )
+    fatal_task = asyncio.create_task(fatal.wait())
     try:
         await asyncio.wait(
-            {t for t in (sync_task, restart_task) if t},
+            {t for t in (sync_task, restart_task, fatal_task) if t},
             return_when=asyncio.FIRST_COMPLETED,
         )
         if sync_task.done():
             sync_task.result()
     finally:
-        for task in (briefing_task, signal_task, restart_task, sync_task):
+        for task in (briefing_task, signal_task, restart_task, fatal_task, sync_task):
             if task:
                 task.cancel()
         if webhook_runner:
@@ -1139,6 +1144,8 @@ async def main() -> None:
         await http.close()
         await claude.disconnect()
         await matrix.close()
+    if fatal.is_set():
+        sys.exit(1)
 
 
 if __name__ == "__main__":
