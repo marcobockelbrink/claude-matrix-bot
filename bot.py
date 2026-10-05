@@ -121,6 +121,7 @@ STATUS_PAGE = """<!doctype html>
 <tr><td class="muted">Voice</td><td>{voice}</td></tr>
 <tr><td class="muted">Confirm destructive</td><td>{confirm}</td></tr>
 <tr><td class="muted">Next briefing</td><td>{briefing}</td></tr>
+<tr><td class="muted">Next restart</td><td>{restart}</td></tr>
 </table>
 <h2>Agent runs</h2>
 <table><tr><th>Time</th><th>Via</th><th></th><th>Duration</th><th>Prompt</th></tr>{runs}</table>
@@ -389,11 +390,11 @@ async def main() -> None:
         return "hint"
 
     async def can_use_tool(tool_name, tool_input, context):
-        if tool_name != "Bash":
-            return PermissionResultAllow()
         if current_run.get("aborted"):
             return PermissionResultDeny(message="This run timed out and was aborted.")
-        cmd = (tool_input or {}).get("command", "")
+        if tool_name != "Bash":
+            return PermissionResultAllow()
+        cmd =(tool_input or {}).get("command", "")
         if not DESTRUCTIVE_RE.search(cmd):
             return PermissionResultAllow()
         target = current_run.get("targets", [None])[0] or default_matrix_target()
@@ -648,6 +649,7 @@ async def main() -> None:
         async def drain() -> None:
             await claude.interrupt()
             async for _ in claude.receive_response():
+                # Discard: we only need to reach the end of the turn.
                 pass
 
         try:
@@ -1029,6 +1031,7 @@ async def main() -> None:
                 voice=html.escape(p["voice"]),
                 confirm="on" if confirm_destructive else "off",
                 briefing=html.escape(p["next_briefing"] or "off"),
+                restart=html.escape(p["next_restart"] or "off"),
                 runs=runs_html,
                 logs=html.escape("\n".join(list(LOG_BUFFER)[-100:])),
             )
