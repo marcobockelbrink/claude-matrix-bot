@@ -142,6 +142,8 @@ CONFIRM_TIMEOUT_S = 180
 # A wedged agent run holds the serial lock, which would silently swallow every
 # later message — cap it instead.
 AGENT_TIMEOUT_S = int(os.environ.get("AGENT_TIMEOUT_S") or 900)
+# How long an interrupted turn gets to wind down before the session is rebuilt.
+ABORT_DRAIN_TIMEOUT_S = 30
 
 # A delivery target is ("matrix", room_id) or ("signal", recipient) where a
 # Signal recipient is a phone number or "group.<base64 id>".
@@ -315,6 +317,7 @@ async def main() -> None:
     webhook_port = int(os.environ.get("WEBHOOK_PORT") or 0)
     webhook_token = os.environ.get("WEBHOOK_TOKEN") or ""
     briefing_time = os.environ.get("BRIEFING_TIME") or ""
+    restart_time = os.environ.get("RESTART_TIME") or "03:00"
     tz = ZoneInfo(os.environ.get("TZ") or "Europe/Berlin")
     whisper_model_name = os.environ.get("WHISPER_MODEL", "small")
     confirm_destructive = (os.environ.get("CONFIRM_DESTRUCTIVE") or "true").lower() in (
@@ -344,6 +347,7 @@ async def main() -> None:
     last_sync = {"ts": 0.0}
     signal_state = {"connected": False}
     briefing_next = {"iso": None}
+    restart_next = {"iso": None}
 
     system_prompt = Path(__file__).with_name("system_prompt.md").read_text()
 
@@ -387,6 +391,8 @@ async def main() -> None:
     async def can_use_tool(tool_name, tool_input, context):
         if tool_name != "Bash":
             return PermissionResultAllow()
+        if current_run.get("aborted"):
+            return PermissionResultDeny(message="This run timed out and was aborted.")
         cmd = (tool_input or {}).get("command", "")
         if not DESTRUCTIVE_RE.search(cmd):
             return PermissionResultAllow()
@@ -631,6 +637,31 @@ async def main() -> None:
                 pass
 
     # ── Agent runs ────────────────────────────────────────────────────────────
+    async def abort_turn() -> None:
+        """Stop a timed-out turn so it can't keep acting or bleed into the next."""
+        # Cancelling our reader doesn't stop the turn itself: it would go on
+        # running tools, and its leftover messages would be read as the reply
+        # to the next prompt.
+        current_run["aborted"] = True
+        resolve_confirmation(False)
+
+        async def drain() -> None:
+            await claude.interrupt()
+            async for _ in claude.receive_response():
+                pass
+
+        try:
+            await asyncio.wait_for(drain(), ABORT_DRAIN_TIMEOUT_S)
+        except Exception:
+            # A fresh session loses the conversation so far, but a turn that
+            # won't stop is worse.
+            log.exception("Interrupt failed — reconnecting the agent session")
+            try:
+                await claude.disconnect()
+                await claude.connect()
+            except Exception:
+                log.exception("Reconnecting the agent session failed")
+
     async def run_agent(
         targets: list[Target], prompt: str, announce: bool = True
     ) -> None:
@@ -658,7 +689,10 @@ async def main() -> None:
             except asyncio.TimeoutError:
                 ok = False
                 log.error("Agent run timed out after %ds — aborting", AGENT_TIMEOUT_S)
+                await abort_turn()
                 await deliver(targets[0], S["agent_timeout"])
+                # Otherwise the aborted run's files would go to the next run's chat.
+                await flush_outbox(targets)
                 return
             except Exception:
                 ok = False
@@ -948,6 +982,7 @@ async def main() -> None:
                 "voice": whisper_model_name if voice_enabled else "off",
                 "confirm_destructive": confirm_destructive,
                 "next_briefing": briefing_next["iso"],
+                "next_restart": restart_next["iso"],
                 "runs_total": len(run_history),
                 "last_run": run_history[0] if run_history else None,
                 "lang": lang,
@@ -1054,10 +1089,46 @@ async def main() -> None:
         ", ".join(sorted(signal_allowed)) if signal_enabled else "off",
         lang,
     )
+    # ── Scheduled restart ─────────────────────────────────────────────────────
+    # The process just exits; the container's restart policy brings it back.
+    restart_task = None
+    if restart_time.lower() != "off":
+        try:
+            rh, rm = (int(x) for x in restart_time.split(":"))
+            if not (0 <= rh < 24 and 0 <= rm < 60):
+                raise ValueError(restart_time)
+        except ValueError:
+            log.error("Invalid RESTART_TIME %r (expected HH:MM or off)", restart_time)
+            rh = rm = None
+        if rh is not None:
+
+            async def wait_for_restart() -> None:
+                now = datetime.now(tz)
+                target_dt = now.replace(hour=rh, minute=rm, second=0, microsecond=0)
+                if target_dt <= now:
+                    target_dt += timedelta(days=1)
+                restart_next["iso"] = target_dt.isoformat(timespec="minutes")
+                log.info("Next scheduled restart at %s", target_dt.isoformat())
+                await asyncio.sleep((target_dt - now).total_seconds())
+                # Let a running agent turn finish; never released, so no new
+                # one starts while we shut down.
+                await agent_lock.acquire()
+                log.info("Scheduled restart — exiting.")
+
+            restart_task = asyncio.create_task(wait_for_restart())
+
+    sync_task = asyncio.create_task(
+        matrix.sync_forever(timeout=30000, full_state=True)
+    )
     try:
-        await matrix.sync_forever(timeout=30000, full_state=True)
+        await asyncio.wait(
+            {t for t in (sync_task, restart_task) if t},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if sync_task.done():
+            sync_task.result()
     finally:
-        for task in (briefing_task, signal_task):
+        for task in (briefing_task, signal_task, restart_task, sync_task):
             if task:
                 task.cancel()
         if webhook_runner:

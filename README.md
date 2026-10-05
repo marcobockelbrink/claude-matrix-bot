@@ -99,7 +99,8 @@ Fill in `.env`:
 
 Optional features (see comments in `.env.example`): `BOT_LANG` (de/en), `WEBHOOK_TOKEN`
 (enables the notification webhook), `BRIEFING_TIME` (daily briefing, e.g. `07:00`),
-`WHISPER_MODEL` (voice transcription, `off` to disable), `CONFIRM_DESTRUCTIVE`.
+`WHISPER_MODEL` (voice transcription, `off` to disable), `CONFIRM_DESTRUCTIVE`,
+`RESTART_TIME` (daily restart, default `03:00`, `off` to disable).
 
 `.env` is gitignored — it never gets committed.
 
