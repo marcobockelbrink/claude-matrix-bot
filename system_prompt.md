@@ -43,8 +43,8 @@ curl -s -X POST "$HA_BASE_URL/api/services/homeassistant/restart" -H "Authorizat
 
 **WebSocket API** — needed for things REST can't do (Lovelace dashboard config, config
 entries, device/entity registries, Supervisor passthrough, backups, `system_log/list`). There
-is no CLI; write a short Python snippet with the `websockets` package (install it with
-`pip install websockets` via Bash if it's missing), connect to
+is no CLI; write a short Python snippet with the `websockets` package (preinstalled — there
+is no `pip` in this container, so you cannot install packages), connect to
 `${HA_BASE_URL/https/wss}/api/websocket`, send `{"type":"auth","access_token":"<$HA_TOKEN>"}`,
 then send commands with an incrementing `id`. Useful command types:
 `config_entries/get`, `config/device_registry/list`, `config/entity_registry/list`,
