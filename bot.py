@@ -188,7 +188,7 @@ STRINGS = {
         ),
         "confirm_hint": "Bitte mit **ja** oder **nein** antworten (oder 👍/👎).",
         "confirm_timeout": "⏱️ Keine Bestätigung erhalten — Befehl wurde NICHT ausgeführt.",
-        "online": "🟢 Bin wieder online und einsatzbereit.",
+        "online": "🟢 Bin wieder online und einsatzbereit (Version {version}).",
         "agent_timeout": "⏱️ Der Agent hat zu lange gebraucht und wurde abgebrochen. Bitte nochmal versuchen.",
         "agent_reset": "⚠️ Der Agent hat nicht richtig geantwortet ({reason}). Die Sitzung wurde neu gestartet — bitte nochmal senden.",
         "agent_reset_partial": "⚠️ Der Agent hat nicht richtig geantwortet ({reason}). Die Sitzung wurde neu gestartet. Achtung: Ein Teil der Anfrage wurde möglicherweise schon ausgeführt — bitte erst prüfen, bevor du sie nochmal sendest.",
@@ -210,7 +210,7 @@ STRINGS = {
         ),
         "confirm_hint": "Please reply **yes** or **no** (or 👍/👎).",
         "confirm_timeout": "⏱️ No confirmation received — the command was NOT run.",
-        "online": "🟢 Back online and ready.",
+        "online": "🟢 Back online and ready (version {version}).",
         "agent_timeout": "⏱️ The agent took too long and was aborted. Please try again.",
         "agent_reset": "⚠️ The agent did not answer properly ({reason}). Its session was restarted — please send that again.",
         "agent_reset_partial": "⚠️ The agent did not answer properly ({reason}). Its session was restarted. Careful: part of the request may already have been carried out — check before sending it again.",
@@ -1065,7 +1065,7 @@ async def main() -> None:
         sent = False
         for target in targets:
             try:
-                await deliver(target, S["online"])
+                await deliver(target, S["online"].format(version=BOT_VERSION))
                 sent = True
             except Exception:
                 log.exception("Could not send the online message to %s", loggable(str(target), 120))

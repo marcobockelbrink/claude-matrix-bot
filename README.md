@@ -198,14 +198,34 @@ notification webhook):
 
 ### Prebuilt image
 
-Every push to `main` builds a multi-arch image (amd64 + arm64) via GitHub Actions:
+GitHub Actions builds multi-arch images (amd64 + arm64):
+
+| Image tag | What it is |
+| --- | --- |
+| `vX.Y.Z` | exactly that release |
+| `latest` | the newest release |
+| `edge` | the current `main`, between releases |
 
 ```
 ghcr.io/marcobockelbrink/claude-matrix-bot:latest
 ```
 
-Tags (`vX.Y.Z`) get matching image tags. To use it with compose instead of building
-locally, replace `build: .` with `image: ghcr.io/marcobockelbrink/claude-matrix-bot:latest`.
+To use it with compose instead of building locally, replace `build: .` with
+`image: ghcr.io/marcobockelbrink/claude-matrix-bot:latest`.
+
+The bot reports the version it was built from (`v0.6.0`, or `v0.6.0-3-gabc1234` for the
+third commit after that release) in its startup log, on `/status` and in the "back online"
+chat message.
+
+**Cutting a release:** bump the image tag in `deploy/k8s/bot.yaml` and
+`deploy/helm/ha-matrix-bot/` (`values.yaml`, `Chart.yaml`), merge, then tag `main`:
+
+```bash
+git tag -s vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
+gh release create vX.Y.Z --verify-tag --generate-notes
+```
+
+The tag push builds `vX.Y.Z` and moves `latest`.
 
 ### Kubernetes (plain manifests)
 
