@@ -147,6 +147,8 @@ CONFIRM_TIMEOUT_S = 180
 # automation can trigger through smart notifications.
 NOTIFY_SMART_WINDOW_S = 600
 MIN_WEBHOOK_TOKEN_CHARS = 24
+# A restart loop must not flood the chat with "back online" messages.
+ONLINE_NOTICE_MIN_GAP_S = 600
 # A wedged agent run holds the serial lock, which would silently swallow every
 # later message — cap it instead.
 AGENT_TIMEOUT_S = int(os.environ.get("AGENT_TIMEOUT_S") or 900)
@@ -186,6 +188,7 @@ STRINGS = {
         ),
         "confirm_hint": "Bitte mit **ja** oder **nein** antworten (oder 👍/👎).",
         "confirm_timeout": "⏱️ Keine Bestätigung erhalten — Befehl wurde NICHT ausgeführt.",
+        "online": "🟢 Bin wieder online und einsatzbereit.",
         "agent_timeout": "⏱️ Der Agent hat zu lange gebraucht und wurde abgebrochen. Bitte nochmal versuchen.",
         "agent_reset": "⚠️ Der Agent hat nicht richtig geantwortet ({reason}). Die Sitzung wurde neu gestartet — bitte nochmal senden.",
         "agent_reset_partial": "⚠️ Der Agent hat nicht richtig geantwortet ({reason}). Die Sitzung wurde neu gestartet. Achtung: Ein Teil der Anfrage wurde möglicherweise schon ausgeführt — bitte erst prüfen, bevor du sie nochmal sendest.",
@@ -207,6 +210,7 @@ STRINGS = {
         ),
         "confirm_hint": "Please reply **yes** or **no** (or 👍/👎).",
         "confirm_timeout": "⏱️ No confirmation received — the command was NOT run.",
+        "online": "🟢 Back online and ready.",
         "agent_timeout": "⏱️ The agent took too long and was aborted. Please try again.",
         "agent_reset": "⚠️ The agent did not answer properly ({reason}). Its session was restarted — please send that again.",
         "agent_reset_partial": "⚠️ The agent did not answer properly ({reason}). Its session was restarted. Careful: part of the request may already have been carried out — check before sending it again.",
@@ -364,6 +368,20 @@ def save_state(state: dict) -> None:
         log.exception("Could not persist state file")
 
 
+def should_announce_start(state: dict, now: float) -> bool:
+    """Whether this start is worth a "back online" message to the owner.
+
+    Not after the scheduled restart (nobody wants that every night), and not
+    again within ONLINE_NOTICE_MIN_GAP_S of the last one (restart loops).
+    """
+    if state.get("planned_restart"):
+        return False
+    last = state.get("online_notice_ts")
+    if not isinstance(last, (int, float)):
+        return True
+    return now - last >= ONLINE_NOTICE_MIN_GAP_S
+
+
 def load_session() -> dict | None:
     try:
         return json.loads(SESSION_FILE.read_text())
@@ -452,6 +470,9 @@ async def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
     state = load_state()
+    online_notice = {"due": should_announce_start(state, time.time())}
+    if state.pop("planned_restart", None):
+        save_state(state)
 
     # ── Status bookkeeping (served on /status) ───────────────────────────────
     started_at = time.time()
@@ -1034,8 +1055,32 @@ async def main() -> None:
             loggable(event.sender, 80),
         )
 
+    async def announce_online() -> None:
+        targets = notify_targets()
+        if not targets:
+            # Try again on the next syncs for two minutes; after that a
+            # "back online" would no longer be news.
+            online_notice["due"] = time.time() - started_at < 120
+            return
+        sent = False
+        for target in targets:
+            try:
+                await deliver(target, S["online"])
+                sent = True
+            except Exception:
+                log.exception("Could not send the online message to %s", loggable(str(target), 120))
+        if sent:
+            state["online_notice_ts"] = time.time()
+            save_state(state)
+        else:
+            online_notice["due"] = time.time() - started_at < 120
+
     async def on_sync(_response: SyncResponse) -> None:
         last_sync["ts"] = time.time()
+        # After the first sync the rooms are known and messages can go out.
+        if online_notice["due"]:
+            online_notice["due"] = False
+            spawn(announce_online())
 
     matrix.add_event_callback(on_message, RoomMessageText)
     matrix.add_event_callback(on_audio, (RoomMessageAudio, RoomEncryptedAudio))
@@ -1359,6 +1404,9 @@ async def main() -> None:
                 # Let a running agent turn finish; never released, so no new
                 # one starts while we shut down.
                 await agent_lock.acquire()
+                # The next start reads this and skips its online message.
+                state["planned_restart"] = True
+                save_state(state)
                 log.info("Scheduled restart — exiting.")
 
             restart_task = asyncio.create_task(wait_for_restart())
