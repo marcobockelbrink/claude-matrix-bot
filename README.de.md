@@ -231,10 +231,23 @@ Online-Meldung im Chat.
 
 ```bash
 git tag -s vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
-gh release create vX.Y.Z --verify-tag --generate-notes
 ```
 
-Der Tag-Push baut `vX.Y.Z` und setzt `latest` um.
+Der Tag-Push erledigt den Rest, und nur wenn jeder Schritt besteht: Der Tag muss signiert
+sein und auf `main` liegen, die Unit-Tests laufen im Image, ein Trivy-Scan darf keine
+behebbare Lücke der Stufe HIGH/CRITICAL finden; dann wird `vX.Y.Z` gebaut, signiert und
+attestiert, `latest` umgesetzt und das GitHub-Release mit dem Image-Digest angelegt.
+
+**Image prüfen** (Digest und exakte Befehle stehen in den Notizen jedes Releases):
+
+```bash
+cosign verify ghcr.io/marcobockelbrink/claude-matrix-bot:vX.Y.Z \
+  --certificate-identity https://github.com/marcobockelbrink/claude-matrix-bot/.github/workflows/docker.yml@refs/tags/vX.Y.Z \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+gh attestation verify oci://ghcr.io/marcobockelbrink/claude-matrix-bot:vX.Y.Z \
+  --repo marcobockelbrink/claude-matrix-bot
+```
 
 ### Kubernetes (Plain Manifests)
 
@@ -295,7 +308,13 @@ via sealed-secrets / SOPS). Alle Optionen: `deploy/helm/ha-matrix-bot/values.yam
 
 ## Sicherheit
 
-- Commits und Release-Tags sind signiert.
+- Commits und Release-Tags sind signiert; ein Release entsteht nur aus einem signierten Tag
+  auf `main`.
+- Images sind mit Sigstore signiert (ohne Schlüssel, gebunden an den Release-Workflow) und
+  tragen SBOM- und Build-Herkunftsnachweise. Veröffentlicht wird nur, wenn die Unit-Tests
+  bestehen und das Image keine behebbare Lücke der Stufe HIGH/CRITICAL hat.
+- Abhängigkeiten sind mit Hashes gesperrt (`uv.lock`); das Runtime-Image enthält weder
+  Compiler noch pip.
 - Die CI führt bei jedem Push [CodeQL](https://github.com/marcobockelbrink/claude-matrix-bot/security/code-scanning)
   und Trivy aus (Dateisystem-, IaC- und Container-Image-Scans); Dependabot überwacht pip-,
   Docker- und GitHub-Actions-Abhängigkeiten. Secret Scanning mit Push-Schutz ist aktiv.

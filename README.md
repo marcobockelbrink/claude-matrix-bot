@@ -222,10 +222,23 @@ chat message.
 
 ```bash
 git tag -s vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
-gh release create vX.Y.Z --verify-tag --generate-notes
 ```
 
-The tag push builds `vX.Y.Z` and moves `latest`.
+The tag push does the rest, and only if every step passes: the tag must be signed and on
+`main`, the unit tests run inside the image, a Trivy scan must find no fixable HIGH/CRITICAL
+vulnerability; then `vX.Y.Z` is built, signed and attested, `latest` moves, and the GitHub
+release is created with the image digest.
+
+**Verifying an image** (digest and exact commands are in each release's notes):
+
+```bash
+cosign verify ghcr.io/marcobockelbrink/claude-matrix-bot:vX.Y.Z \
+  --certificate-identity https://github.com/marcobockelbrink/claude-matrix-bot/.github/workflows/docker.yml@refs/tags/vX.Y.Z \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+gh attestation verify oci://ghcr.io/marcobockelbrink/claude-matrix-bot:vX.Y.Z \
+  --repo marcobockelbrink/claude-matrix-bot
+```
 
 ### Kubernetes (plain manifests)
 
@@ -284,7 +297,11 @@ sealed-secrets / SOPS). See `deploy/helm/ha-matrix-bot/values.yaml` for all opti
 
 ## Security
 
-- Commits and release tags are signed.
+- Commits and release tags are signed; a release is only built from a signed tag on `main`.
+- Images are signed with Sigstore (keyless, bound to the release workflow) and carry SBOM and
+  build provenance attestations. Nothing is published unless the unit tests pass and the image
+  has no fixable HIGH/CRITICAL vulnerability.
+- Dependencies are locked with hashes (`uv.lock`); the runtime image has no compiler and no pip.
 - CI runs [CodeQL](https://github.com/marcobockelbrink/claude-matrix-bot/security/code-scanning)
   and Trivy (filesystem, IaC, and container-image scans) on every push; Dependabot watches
   pip, Docker, and GitHub Actions dependencies. Secret scanning with push protection is on.
