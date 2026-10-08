@@ -34,7 +34,7 @@ class ParseNotifyTest(unittest.TestCase):
                 parse_notify(body)
 
     def test_room_must_be_a_string(self):
-        for room in (5, ["!abc:matrix.org"], {"id": "!abc:matrix.org"}):
+        for room in (5, 0, False, ["!abc:matrix.org"], {"id": "!abc:matrix.org"}):
             with self.subTest(room=room), self.assertRaises(ValueError):
                 parse_notify({"message": "x", "room": room})
 

@@ -248,17 +248,17 @@ def hide_secrets_from_agent(*names: str) -> None:
 def parse_notify(payload: object) -> tuple[str, str | None, bool]:
     """Validate a /notify body and return (message, room, smart).
 
-    Raises ValueError with a reason that is safe to send back to the caller.
+    Raises ValueError if the body is malformed.
     """
     if not isinstance(payload, dict):
         raise ValueError("expected a JSON object")
     message = str(payload.get("message") or "").strip()
     if not message:
         raise ValueError("missing 'message'")
-    room = payload.get("room") or None
+    room = payload.get("room")
     if room is not None and not isinstance(room, str):
         raise ValueError("'room' must be a string")
-    return message, room, bool(payload.get("smart"))
+    return message, room or None, bool(payload.get("smart"))
 
 
 def chunk(text: str, size: int = CHUNK_CHARS):
@@ -994,8 +994,12 @@ async def main() -> None:
                 return web.Response(status=400, text="invalid JSON")
             try:
                 message, room, smart = parse_notify(payload)
-            except ValueError as exc:
-                return web.Response(status=400, text=str(exc))
+            except ValueError:
+                return web.Response(
+                    status=400,
+                    text="invalid body: need a JSON object with 'message' "
+                    "and optionally 'room' (string) and 'smart'",
+                )
             if room:
                 # Only rooms the bot is in — not wherever the caller points it.
                 if room not in matrix.rooms:
