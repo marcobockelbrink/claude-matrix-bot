@@ -30,6 +30,11 @@ class JudgeTurnTest(unittest.TestCase):
     def test_budget_limit_is_not_a_broken_session(self):
         self.assertIsNone(judge_turn(result(subtype="error_max_budget_usd", is_error=True), []))
 
+    def test_limit_wins_over_api_errors_seen_on_the_way(self):
+        self.assertIsNone(
+            judge_turn(result(subtype="error_max_turns", is_error=True), ["rate_limit"])
+        )
+
     def test_missing_result_means_new_session(self):
         reason, reset = judge_turn(None, [])
         self.assertTrue(reset)

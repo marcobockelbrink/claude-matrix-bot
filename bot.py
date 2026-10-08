@@ -295,6 +295,9 @@ def judge_turn(result, api_errors: list[str]) -> tuple[str, bool] | None:
     assistant messages carried. A turn can report "success" and still be an
     API error dressed up as an answer — that is what this catches.
     """
+    if result is not None and result.subtype in LIMIT_SUBTYPES:
+        # Wins over API errors the SDK retried on the way to the limit.
+        return None
     if api_errors:
         code = api_errors[0]
         return f"API error: {code}", code not in ERRORS_A_NEW_SESSION_CANNOT_FIX
@@ -305,7 +308,7 @@ def judge_turn(result, api_errors: list[str]) -> tuple[str, bool] | None:
         if status in (401, 403, 429) or (status or 0) >= 500:
             return f"API error: HTTP {status}", False
         return "the answer is an error" + (f", HTTP {status}" if status else ""), True
-    if result.subtype != "success" and result.subtype not in LIMIT_SUBTYPES:
+    if result.subtype != "success":
         # e.g. error_during_execution, what a crashed session reports.
         return f"the turn ended with {result.subtype}", True
     return None
@@ -828,9 +831,12 @@ async def main() -> None:
                         # One line per turn: the evidence when a turn looks
                         # fine from outside but did nothing.
                         log.info(
-                            "Agent turn: subtype=%s is_error=%s api_ms=%s turns=%s",
+                            "Agent turn: subtype=%s is_error=%s api_status=%s "
+                            "api_errors=%s api_ms=%s turns=%s",
                             loggable(str(message.subtype), 40),
                             message.is_error,
+                            getattr(message, "api_error_status", None),
+                            loggable(",".join(turn["api_errors"]) or "-", 80),
                             message.duration_api_ms,
                             message.num_turns,
                         )
@@ -846,7 +852,9 @@ async def main() -> None:
                     session_ok = await reconnect_session()
                     # Nothing was executed, so the fresh session can redo it.
                     if session_ok and not turn["used_tools"]:
-                        verdict = await asyncio.wait_for(attempt(), AGENT_TIMEOUT_S)
+                        # Both attempts share one budget; the lock is held meanwhile.
+                        left = max(60, AGENT_TIMEOUT_S - (time.time() - t0))
+                        verdict = await asyncio.wait_for(attempt(), left)
                 if verdict:
                     ok = False
                     reason, reset = verdict
