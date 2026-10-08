@@ -1,3 +1,7 @@
+# Source of the uv binary for the build stage (a named stage so Dependabot
+# keeps the pin current).
+FROM ghcr.io/astral-sh/uv:0.11@sha256:77280f2f771df71f90786c314fe1bbc1e023feac652969bbf139c280babf2eb7 AS uv
+
 # ── Build stage ───────────────────────────────────────────────────────────
 # Compiles the wheels that have no prebuilt distribution (python-olm for
 # matrix-nio[e2e]); the toolchain stays out of the runtime image.
@@ -10,8 +14,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# uv only turns uv.lock into a hashed requirements list (--locked fails the
+# build if the lock no longer matches pyproject.toml); pip does the install and
+# refuses anything whose hash is not in that list.
+COPY --from=uv /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv export --locked --no-emit-project --format requirements-txt -o locked.txt \
+    && pip install --no-cache-dir --require-hashes --prefix=/install -r locked.txt
 
 
 # ── Runtime stage ─────────────────────────────────────────────────────────
