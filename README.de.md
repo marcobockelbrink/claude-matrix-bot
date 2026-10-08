@@ -207,15 +207,34 @@ Benachrichtigungs-Webhook):
 
 ### Fertiges Image
 
-Jeder Push auf `main` baut per GitHub Actions ein Multi-Arch-Image (amd64 + arm64):
+GitHub Actions baut Multi-Arch-Images (amd64 + arm64):
+
+| Image-Tag | Bedeutung |
+| --- | --- |
+| `vX.Y.Z` | genau dieses Release |
+| `latest` | das neueste Release |
+| `edge` | der aktuelle Stand von `main`, zwischen den Releases |
 
 ```
 ghcr.io/marcobockelbrink/claude-matrix-bot:latest
 ```
 
-Tags (`vX.Y.Z`) bekommen passende Image-Tags. Um es mit Compose statt eines lokalen Builds
-zu nutzen: `build: .` durch `image: ghcr.io/marcobockelbrink/claude-matrix-bot:latest`
-ersetzen.
+Um es mit Compose statt eines lokalen Builds zu nutzen: `build: .` durch
+`image: ghcr.io/marcobockelbrink/claude-matrix-bot:latest` ersetzen.
+
+Der Bot nennt die Version, aus der er gebaut wurde (`v0.6.0`, oder `v0.6.0-3-gabc1234` für
+den dritten Commit nach diesem Release), im Start-Log, auf `/status` und in der
+Online-Meldung im Chat.
+
+**Release erstellen:** Image-Tag in `deploy/k8s/bot.yaml` und `deploy/helm/ha-matrix-bot/`
+(`values.yaml`, `Chart.yaml`) anheben, mergen, dann `main` taggen:
+
+```bash
+git tag -s vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
+gh release create vX.Y.Z --verify-tag --generate-notes
+```
+
+Der Tag-Push baut `vX.Y.Z` und setzt `latest` um.
 
 ### Kubernetes (Plain Manifests)
 
