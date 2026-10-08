@@ -34,7 +34,7 @@ jobs:
           fetch-depth: 0 # full history for blame / "new code" detection
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
+        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
         with:
           # The branch plugin needs the head SHA on GitHub PRs, otherwise the comment does not reach the PR
           args: >
