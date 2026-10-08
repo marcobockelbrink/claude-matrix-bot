@@ -1072,6 +1072,8 @@ async def main() -> None:
         if sent:
             state["online_notice_ts"] = time.time()
             save_state(state)
+        else:
+            online_notice["due"] = time.time() - started_at < 120
 
     async def on_sync(_response: SyncResponse) -> None:
         last_sync["ts"] = time.time()
