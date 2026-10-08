@@ -518,6 +518,15 @@ async def main() -> None:
     # container's restart policy starts a fresh one.
     fatal = asyncio.Event()
 
+    # asyncio keeps only weak references to tasks: hold fire-and-forget ones
+    # until they finish, or a run could be garbage-collected mid-flight.
+    background_tasks: set[asyncio.Task] = set()
+
+    def spawn(coro) -> None:
+        task = asyncio.create_task(coro)
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
     # ── Matrix client (end-to-end encrypted) ──────────────────────────────────
     os.makedirs(STORE_PATH, exist_ok=True)
     matrix = AsyncClient(
@@ -878,7 +887,7 @@ async def main() -> None:
             loggable(room.room_id, 100),
             loggable(body),
         )
-        asyncio.create_task(run_agent([("matrix", room.room_id)], body))
+        spawn(run_agent([("matrix", room.room_id)], body))
 
     async def on_audio(room: MatrixRoom, event) -> None:
         if not is_relevant(event) or not voice_enabled:
@@ -889,7 +898,7 @@ async def main() -> None:
             loggable(event.sender, 80),
             loggable(room.room_id, 100),
         )
-        asyncio.create_task(handle_matrix_voice(room, event))
+        spawn(handle_matrix_voice(room, event))
 
     async def on_unknown(room: MatrixRoom, event: UnknownEvent) -> None:
         # Reactions (👍/👎) can answer a pending confirmation.
@@ -973,14 +982,14 @@ async def main() -> None:
                 mimetypes.guess_extension(voice_att.get("contentType") or "")
                 or ".ogg"
             )
-            asyncio.create_task(transcribe_and_run(target, audio, suffix))
+            spawn(transcribe_and_run(target, audio, suffix))
             return
 
         if text:
             log.info(
                 "Signal message from %s: %s", loggable(sender, 40), loggable(text)
             )
-            asyncio.create_task(run_agent([target], text))
+            spawn(run_agent([target], text))
 
     async def signal_loop() -> None:
         ws_base = signal_api.replace("https://", "wss://").replace("http://", "ws://")
@@ -1085,7 +1094,7 @@ async def main() -> None:
                     f"language ({lang}). Event: {message}]"
                 )
                 smart_waiting["n"] += 1
-                asyncio.create_task(
+                spawn(
                     run_agent(targets, prompt, announce=False, on_start=smart_started)
                 )
             else:
