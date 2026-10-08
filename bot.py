@@ -67,6 +67,7 @@ from claude_agent_sdk import (
     PermissionResultDeny,
     ResultMessage,
     TextBlock,
+    ToolUseBlock,
 )
 
 load_dotenv()
@@ -117,6 +118,7 @@ STATUS_PAGE = """<!doctype html>
 <table>
 <tr><td class="muted">Version</td><td>{version}</td></tr>
 <tr><td class="muted">Uptime</td><td>{uptime}</td></tr>
+<tr><td class="muted">Agent</td><td>{agent}</td></tr>
 <tr><td class="muted">Matrix</td><td>{matrix}</td></tr>
 <tr><td class="muted">Signal</td><td>{signal}</td></tr>
 <tr><td class="muted">Voice</td><td>{voice}</td></tr>
@@ -185,6 +187,9 @@ STRINGS = {
         "confirm_hint": "Bitte mit **ja** oder **nein** antworten (oder 👍/👎).",
         "confirm_timeout": "⏱️ Keine Bestätigung erhalten — Befehl wurde NICHT ausgeführt.",
         "agent_timeout": "⏱️ Der Agent hat zu lange gebraucht und wurde abgebrochen. Bitte nochmal versuchen.",
+        "agent_reset": "⚠️ Der Agent hat nicht richtig geantwortet ({reason}). Die Sitzung wurde neu gestartet — bitte nochmal senden.",
+        "agent_reset_partial": "⚠️ Der Agent hat nicht richtig geantwortet ({reason}). Die Sitzung wurde neu gestartet. Achtung: Ein Teil der Anfrage wurde möglicherweise schon ausgeführt — bitte erst prüfen, bevor du sie nochmal sendest.",
+        "agent_unusable": "⚠️ Der Agent kann gerade nicht antworten ({reason}).",
         "denied": "Der Besitzer hat diesen Befehl im Chat abgelehnt.",
         "notify_prefix": "🔔 ",
         "yes": ("ja", "yes", "ok", "okay", "mach", "👍"),
@@ -203,6 +208,9 @@ STRINGS = {
         "confirm_hint": "Please reply **yes** or **no** (or 👍/👎).",
         "confirm_timeout": "⏱️ No confirmation received — the command was NOT run.",
         "agent_timeout": "⏱️ The agent took too long and was aborted. Please try again.",
+        "agent_reset": "⚠️ The agent did not answer properly ({reason}). Its session was restarted — please send that again.",
+        "agent_reset_partial": "⚠️ The agent did not answer properly ({reason}). Its session was restarted. Careful: part of the request may already have been carried out — check before sending it again.",
+        "agent_unusable": "⚠️ The agent cannot answer right now ({reason}).",
         "denied": "The owner declined this command in chat.",
         "notify_prefix": "🔔 ",
         "yes": ("yes", "ja", "ok", "okay", "do it", "👍"),
@@ -265,6 +273,45 @@ def parse_notify(payload: object) -> tuple[str, str | None, bool]:
     if room is not None and not isinstance(room, str):
         raise ValueError("'room' must be a string")
     return message, room or None, bool(payload.get("smart"))
+
+
+# A fresh session does not cure these; replacing it would only lose the conversation.
+ERRORS_A_NEW_SESSION_CANNOT_FIX = {
+    "authentication_failed",
+    "billing_error",
+    "rate_limit",
+    "server_error",
+}
+# The turn stopped at a configured limit; its partial answer is still usable.
+LIMIT_SUBTYPES = {"error_max_turns", "error_max_budget_usd"}
+
+
+def judge_turn(result, api_errors: list[str]) -> tuple[str, bool] | None:
+    """Decide whether an agent turn can be trusted.
+
+    Returns None if it can, otherwise (reason, reset) where reset says whether
+    a fresh session is worth trying. `result` is the turn's ResultMessage (None
+    if the stream ended without one), `api_errors` the error codes its
+    assistant messages carried. A turn can report "success" and still be an
+    API error dressed up as an answer — that is what this catches.
+    """
+    if result is not None and result.subtype in LIMIT_SUBTYPES:
+        # Wins over API errors the SDK retried on the way to the limit.
+        return None
+    if api_errors:
+        code = api_errors[0]
+        return f"API error: {code}", code not in ERRORS_A_NEW_SESSION_CANNOT_FIX
+    if result is None:
+        return "the turn ended without a result", True
+    if result.is_error and result.subtype == "success":
+        status = getattr(result, "api_error_status", None)
+        if status in (401, 403, 429) or (status or 0) >= 500:
+            return f"API error: HTTP {status}", False
+        return "the answer is an error" + (f", HTTP {status}" if status else ""), True
+    if result.subtype != "success":
+        # e.g. error_during_execution, what a crashed session reports.
+        return f"the turn ended with {result.subtype}", True
+    return None
 
 
 class SmartBudget:
@@ -409,6 +456,7 @@ async def main() -> None:
     # ── Status bookkeeping (served on /status) ───────────────────────────────
     started_at = time.time()
     run_history: deque = deque(maxlen=20)
+    agent_state: dict = {"ok": True, "failure": None}
     last_sync = {"ts": 0.0}
     signal_state = {"connected": False}
     briefing_next = {"iso": None}
@@ -714,6 +762,17 @@ async def main() -> None:
                 pass
 
     # ── Agent runs ────────────────────────────────────────────────────────────
+    async def reconnect_session() -> bool:
+        """Replace the agent session with a fresh one; the conversation is lost."""
+        try:
+            await claude.disconnect()
+            await claude.connect()
+        except Exception:
+            log.exception("Reconnecting the agent session failed")
+            return False
+        log.warning("Agent session replaced with a fresh one.")
+        return True
+
     async def abort_turn() -> bool:
         """Stop a timed-out turn so it can't keep acting or bleed into the next.
 
@@ -736,12 +795,7 @@ async def main() -> None:
             # A fresh session loses the conversation so far, but a turn that
             # won't stop is worse.
             log.exception("Interrupt failed — reconnecting the agent session")
-            try:
-                await claude.disconnect()
-                await claude.connect()
-            except Exception:
-                log.exception("Reconnecting the agent session failed")
-                return False
+            return await reconnect_session()
         return True
 
     async def run_agent(
@@ -754,24 +808,76 @@ async def main() -> None:
             if announce:
                 await deliver(targets[0], S["thinking"])
             parts: list[str] = []
+            turn: dict = {}
             t0 = time.time()
             ok = True
 
-            async def collect() -> None:
+            async def attempt() -> tuple[str, bool] | None:
+                """Run the prompt once; returns judge_turn's verdict."""
+                parts.clear()
+                turn.update(result=None, api_errors=[], used_tools=False)
                 await claude.query(prompt)
                 async for message in claude.receive_response():
                     if isinstance(message, AssistantMessage):
+                        if getattr(message, "error", None):
+                            turn["api_errors"].append(message.error)
                         for block in message.content:
                             if isinstance(block, TextBlock) and block.text.strip():
                                 parts.append(block.text)
+                            elif isinstance(block, ToolUseBlock):
+                                turn["used_tools"] = True
                     elif isinstance(message, ResultMessage):
+                        turn["result"] = message
+                        # One line per turn: the evidence when a turn looks
+                        # fine from outside but did nothing.
+                        log.info(
+                            "Agent turn: subtype=%s is_error=%s api_status=%s "
+                            "api_errors=%s api_ms=%s turns=%s",
+                            loggable(str(message.subtype), 40),
+                            message.is_error,
+                            getattr(message, "api_error_status", None),
+                            loggable(",".join(turn["api_errors"]) or "-", 80),
+                            message.duration_api_ms,
+                            message.num_turns,
+                        )
                         if message.subtype and message.subtype != "success":
                             log.warning("Agent turn ended: %s", message.subtype)
+                return judge_turn(turn["result"], turn["api_errors"])
 
             try:
-                await asyncio.wait_for(collect(), AGENT_TIMEOUT_S)
+                verdict = await asyncio.wait_for(attempt(), AGENT_TIMEOUT_S)
+                session_ok = True
+                if verdict and verdict[1]:
+                    log.error("Agent turn not usable (%s) — replacing the session", verdict[0])
+                    session_ok = await reconnect_session()
+                    # Nothing was executed, so the fresh session can redo it.
+                    # Both attempts share one budget; the lock is held meanwhile.
+                    left = AGENT_TIMEOUT_S - (time.time() - t0)
+                    if session_ok and not turn["used_tools"] and left > 30:
+                        verdict = await asyncio.wait_for(attempt(), left)
+                if verdict:
+                    ok = False
+                    reason, reset = verdict
+                    detail = " ".join(parts).strip()[:200]
+                    if detail:
+                        reason = f"{reason}: {detail}"
+                    log.error("Agent turn not usable: %s", loggable(reason, 300))
+                    agent_state.update(ok=False, failure=reason)
+                    if not reset:
+                        text = S["agent_unusable"]
+                    elif turn["used_tools"]:
+                        text = S["agent_reset_partial"]
+                    else:
+                        text = S["agent_reset"]
+                    await deliver(targets[0], text.format(reason=reason))
+                    await flush_outbox(targets)
+                    if not session_ok:
+                        fatal.set()
+                    return
+                agent_state.update(ok=True, failure=None)
             except asyncio.TimeoutError:
                 ok = False
+                agent_state.update(ok=False, failure="timed out")
                 log.error("Agent run timed out after %ds — aborting", AGENT_TIMEOUT_S)
                 session_ok = await abort_turn()
                 await deliver(targets[0], S["agent_timeout"])
@@ -782,6 +888,7 @@ async def main() -> None:
                 return
             except Exception:
                 ok = False
+                agent_state.update(ok=False, failure="failed with an exception, see the log")
                 log.exception("Agent run failed")
                 await deliver(targets[0], S["error"])
                 return
@@ -1108,6 +1215,8 @@ async def main() -> None:
                 "ok": True,
                 "version": BOT_VERSION,
                 "uptime_s": int(now - started_at),
+                "agent_ok": agent_state["ok"],
+                "agent_failure": agent_state["failure"],
                 "matrix_connected": bool(
                     last_sync["ts"] and now - last_sync["ts"] < 120
                 ),
@@ -1158,6 +1267,8 @@ async def main() -> None:
                 cls="ok" if p["matrix_connected"] else "bad",
                 state="online" if p["matrix_connected"] else "degraded",
                 uptime=fmt_uptime(p["uptime_s"]),
+                agent=badge(p["agent_ok"], "ok", "failing")
+                + (" " + html.escape(p["agent_failure"]) if p["agent_failure"] else ""),
                 matrix=badge(p["matrix_connected"]),
                 signal=badge(p["signal_connected"]) if signal_enabled else "off",
                 voice=html.escape(p["voice"]),
