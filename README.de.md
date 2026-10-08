@@ -47,6 +47,12 @@ einer Claude-Code-Session, erreichbar überall dort, wo dein Handy Empfang hat.
 - **Mehrbenutzer & optionaler Signal-Kanal** — mehrere Matrix-Nutzer freischalten (Familie)
   und/oder Signal als zweite Chat-Oberfläche über ein `signal-cli-rest-api`-Sidecar
   aktivieren.
+- **Passt auf sich selbst auf** — ein hängender Lauf wird nach 15 Minuten gestoppt; eine
+  Agent-Sitzung, die mit einem API-Fehler antwortet statt zu arbeiten, wird ersetzt und die
+  Anfrage wiederholt; ein täglicher Neustart hält die Sitzung frisch. Nach einem Start meldet
+  sich der Bot im Chat mit „wieder online" und seiner Version.
+- **Statusseite** — `/status` zeigt Version, Verbindungen, Agent-Zustand, die letzten Läufe
+  und die neuesten Logzeilen, als HTML oder JSON.
 
 ## Funktionsweise
 
@@ -67,7 +73,11 @@ Der Bot braucht weder eingehende Ports noch LAN-Zugriff — er baut nur ausgehen
 Verbindungen auf (zu matrix.org und zur öffentlichen URL deines HA). Er spricht Home
 Assistant über die **REST-/WebSocket-API** der öffentlichen Instanz-URL an und funktioniert
 damit von überall. (Er nutzt *kein* SSH; Datei-Änderungen in `custom_components/` sind
-außerhalb des Funktionsumfangs.)
+außerhalb des Funktionsumfangs.) Der einzige optionale eingehende Port ist der für Webhook
+und Status (`8321`).
+
+Die Bestandteile, die Abläufe und die Entwurfsentscheidungen dahinter beschreibt
+[docs/architecture.de.md](docs/architecture.de.md).
 
 ## Einrichtung
 
@@ -104,10 +114,12 @@ In der `.env` ausfüllen:
   Absender reagiert der Bot, nur von ihnen nimmt er Einladungen an.
 
 Optionale Funktionen (siehe Kommentare in `.env.example`): `BOT_LANG` (de/en),
-`WEBHOOK_TOKEN` (aktiviert den Benachrichtigungs-Webhook), `BRIEFING_TIME` (tägliches
-Briefing, z.B. `07:00`), `WHISPER_MODEL` (Sprachtranskription, `off` zum Deaktivieren),
-`CONFIRM_DESTRUCTIVE`, `RESTART_TIME` (täglicher Neustart, Standard `03:00`, `off` zum
-Deaktivieren).
+`WEBHOOK_TOKEN` (aktiviert den Benachrichtigungs-Webhook; mindestens 24 zufällige Zeichen),
+`NOTIFY_ROOM` (fester Raum für Benachrichtigungen), `NOTIFY_SMART_LIMIT` (Agent-Läufe aus
+Benachrichtigungen pro 10 Minuten, Standard 6), `BRIEFING_TIME` (tägliches Briefing, z.B.
+`07:00`), `WHISPER_MODEL` (Sprachtranskription, `off` zum Deaktivieren),
+`CONFIRM_DESTRUCTIVE`, `AGENT_TIMEOUT_S` (Obergrenze für einen Agent-Lauf, Standard 900),
+`RESTART_TIME` (täglicher Neustart, Standard `03:00`, `off` zum Deaktivieren).
 
 Die `.env` steht in der `.gitignore` — sie wird nie committet.
 
@@ -194,6 +206,20 @@ actions:
 ```
 
 Mit `smart: false` (Standard) wird die Nachricht wörtlich gepostet, mit 🔔 vorangestellt.
+
+Smarte Benachrichtigungen sind begrenzt, damit eine Automation in einer Schleife nicht endlos
+Agent-Läufe anstellt: Pro 10 Minuten starten höchstens `NOTIFY_SMART_LIMIT` Läufe, und nur
+einer wartet auf den Agenten. Alles darüber wird trotzdem zugestellt, nur wörtlich; die
+Antwort enthält dann `"smart": false`.
+
+### Statusseite
+
+Derselbe Port liefert `http://<bot-host-ip>:8321/status` (gleiches Token, als Header
+`X-Token` oder `?token=`): Version, Laufzeit, Matrix-/Signal-Verbindung, Agent-Zustand
+(`agent_ok`, `agent_failure`), nächstes Briefing und nächster Neustart, die letzten 20 Läufe
+und die neuesten Logzeilen. Mit `?format=json` oder ohne HTML-`Accept`-Header kommt JSON
+zurück, das ein REST-Sensor in Home Assistant überwachen kann. `/healthz` braucht kein Token
+und sagt nur, ob die Matrix-Sync-Schleife lebt.
 
 ## Wo der Bot laufen kann
 
@@ -299,7 +325,10 @@ via sealed-secrets / SOPS). Alle Optionen: `deploy/helm/ha-matrix-bot/values.yam
   sonst in den Raum, in dem zuletzt jemand von der Allowlist geschrieben hat (plus
   `SIGNAL_NOTIFY`, falls konfiguriert).
 - **Frisches Gespräch nach Neustart.** Das Chat-Transkript lebt im Speicher; die
-  Notizdatei `memory.md` des Agenten (im `data/`-Volume) bleibt erhalten.
+  Notizdatei `memory.md` des Agenten (im `data/`-Volume) bleibt erhalten. Mit dem Standard
+  für `RESTART_TIME` passiert das jede Nacht um 03:00 Uhr.
+- **Der geplante Neustart braucht eine Restart-Policy.** Der Bot beendet sich nur;
+  `restart: unless-stopped` (Compose) oder die Restart-Policy des Pods startet ihn wieder.
 - **Nur REST/WS, kein SSH.** Automationen, Dienstaufrufe, Config-Flows und Neustarts sind
   abgedeckt; Datei-Änderungen in `custom_components/` nicht.
 - **Seriell.** Ein Agent-Lauf zur Zeit — für einen Haushalts-Chat völlig ausreichend.
@@ -315,9 +344,14 @@ via sealed-secrets / SOPS). Alle Optionen: `deploy/helm/ha-matrix-bot/values.yam
   bestehen und das Image keine behebbare Lücke der Stufe HIGH/CRITICAL hat.
 - Abhängigkeiten sind mit Hashes gesperrt (`uv.lock`); das Runtime-Image enthält weder
   Compiler noch pip.
+- `main` ändert sich nur über Pull Requests mit grünen Checks; Release-Tags lassen sich
+  weder verschieben noch löschen.
+- Matrix-Passwort und Webhook-Token werden dem Agenten entzogen, bevor seine Sitzung startet.
+  Was der Agent weiterhin lesen kann, steht in [SECURITY.md](SECURITY.md).
 - Die CI führt bei jedem Push [CodeQL](https://github.com/marcobockelbrink/claude-matrix-bot/security/code-scanning)
-  und Trivy aus (Dateisystem-, IaC- und Container-Image-Scans); Dependabot überwacht pip-,
-  Docker- und GitHub-Actions-Abhängigkeiten. Secret Scanning mit Push-Schutz ist aktiv.
+  und Trivy aus (Dateisystem-, IaC- und Container-Image-Scans); Dependabot überwacht das
+  Python-Lockfile sowie Docker- und GitHub-Actions-Abhängigkeiten. Secret Scanning mit
+  Push-Schutz ist aktiv.
 - Schwachstelle gefunden? Bitte die
   [private Schwachstellenmeldung](https://github.com/marcobockelbrink/claude-matrix-bot/security/advisories/new)
   nutzen — siehe [SECURITY.md](SECURITY.md).
@@ -326,7 +360,17 @@ via sealed-secrets / SOPS). Alle Optionen: `deploy/helm/ha-matrix-bot/values.yam
 
 `bot.py` ist eine Ein-Datei-Brücke — auf der einen Seite der matrix-nio-Event-Loop, auf der
 anderen ein persistenter `ClaudeSDKClient`. `system_prompt.md` ist das Home-Assistant-Runbook
-für den Agenten.
+für den Agenten. [docs/architecture.de.md](docs/architecture.de.md) beschreibt die Teile, die
+Abläufe und die bekannten Grenzen.
+
+**Tests.** `tests/` enthält Unit-Tests für die Entscheidungslogik. Sie brauchen die
+Abhängigkeiten des Bots und laufen deshalb im Image (die CI macht es genauso):
+
+```bash
+docker build -t ha-matrix-bot:test .
+docker run --rm -v "$PWD/bot.py:/work/bot.py:ro" -v "$PWD/tests:/work/tests:ro" \
+  -w /work --entrypoint python ha-matrix-bot:test -m unittest discover -s tests -v
+```
 
 **Container-Image.** Multi-Stage-Build auf `python:3.14-slim`: Der Builder installiert exakt
 die in `uv.lock` festgelegten Versionen (mit Hash-Prüfung; nach Änderungen an `pyproject.toml`

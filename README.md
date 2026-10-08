@@ -43,6 +43,12 @@ do from a Claude Code session, reachable wherever your phone has signal.
   the language you write in.
 - **Multi-user & optional Signal channel** — allowlist several Matrix users (family), and/or
   enable Signal as a second chat surface via a `signal-cli-rest-api` sidecar.
+- **Looks after itself** — a run that hangs is stopped after 15 minutes; an agent session that
+  answers with an API error instead of doing the work is replaced and the request retried; a
+  daily restart keeps the session fresh. After a start the bot says "back online" in the chat
+  with its version.
+- **Status page** — `/status` shows version, connections, agent state, recent runs and the
+  latest log lines, as HTML or JSON.
 
 ## How it works
 
@@ -63,6 +69,10 @@ The bot never needs an inbound port or LAN access — it only makes outbound con
 matrix.org and to your HA's public URL). It talks to Home Assistant through the **REST/WebSocket
 API** over your instance's public URL, so it works from anywhere. (It does *not* use SSH, so
 file-level edits to `custom_components/` are out of scope for now — that's a possible v2.)
+The one optional inbound port is the webhook and status port (`8321`).
+
+For the components, the flows and the design decisions behind them see
+[docs/architecture.md](docs/architecture.md).
 
 ## Setup
 
@@ -98,9 +108,11 @@ Fill in `.env`:
   only senders the bot will ever respond to or accept invites from.
 
 Optional features (see comments in `.env.example`): `BOT_LANG` (de/en), `WEBHOOK_TOKEN`
-(enables the notification webhook), `BRIEFING_TIME` (daily briefing, e.g. `07:00`),
-`WHISPER_MODEL` (voice transcription, `off` to disable), `CONFIRM_DESTRUCTIVE`,
-`RESTART_TIME` (daily restart, default `03:00`, `off` to disable).
+(enables the notification webhook; at least 24 random characters), `NOTIFY_ROOM` (fixed room
+for notifications), `NOTIFY_SMART_LIMIT` (agent runs from notifications per 10 minutes,
+default 6), `BRIEFING_TIME` (daily briefing, e.g. `07:00`), `WHISPER_MODEL` (voice
+transcription, `off` to disable), `CONFIRM_DESTRUCTIVE`, `AGENT_TIMEOUT_S` (cap on one agent
+run, default 900), `RESTART_TIME` (daily restart, default `03:00`, `off` to disable).
 
 `.env` is gitignored — it never gets committed.
 
@@ -185,6 +197,20 @@ actions:
 ```
 
 With `smart: false` (default) the message is posted verbatim, prefixed with 🔔.
+
+Smart notifications are capped so that an automation stuck in a loop cannot queue agent runs
+without end: at most `NOTIFY_SMART_LIMIT` runs start per 10 minutes, and only one waits for
+the agent. Anything beyond that is still delivered, just verbatim; the response then says
+`"smart": false`.
+
+### Status page
+
+The same port serves `http://<bot-host-ip>:8321/status` (same token, as `X-Token` header or
+`?token=`): version, uptime, Matrix/Signal connection, agent state (`agent_ok`,
+`agent_failure`), next briefing and restart, the last 20 runs and the latest log lines. With
+`?format=json` or without an HTML `Accept` header it returns JSON, which a Home Assistant
+REST sensor can watch. `/healthz` needs no token and only says whether the Matrix sync loop
+is alive.
 
 ## Where to run it
 
@@ -288,7 +314,10 @@ sealed-secrets / SOPS). See `deploy/helm/ha-matrix-bot/values.yaml` for all opti
   Webhook/briefing messages go to `NOTIFY_ROOM` if set, otherwise to the room someone
   allowlisted last wrote in (plus `SIGNAL_NOTIFY`, if configured).
 - **Fresh conversation on restart.** The chat transcript is held in memory; the agent's
-  `memory.md` notes file (in the `data/` volume) is what carries over.
+  `memory.md` notes file (in the `data/` volume) is what carries over. With the default
+  `RESTART_TIME` that happens every night at 03:00.
+- **The scheduled restart needs a restart policy.** The bot only exits; `restart:
+  unless-stopped` (compose) or the pod's restart policy brings it back.
 - **REST/WS only, no SSH.** Automations, service calls, config-entry flows, and restarts are
   all covered; editing files inside `custom_components/` is not.
 - **Serial.** One agent run at a time — fine for a single-user home-automation chat.
@@ -302,9 +331,14 @@ sealed-secrets / SOPS). See `deploy/helm/ha-matrix-bot/values.yaml` for all opti
   build provenance attestations. Nothing is published unless the unit tests pass and the image
   has no fixable HIGH/CRITICAL vulnerability.
 - Dependencies are locked with hashes (`uv.lock`); the runtime image has no compiler and no pip.
+- `main` only changes through pull requests with green checks; release tags cannot be moved
+  or deleted.
+- The Matrix password and the webhook token are removed from the agent's reach before its
+  session starts. What the agent can still read is listed in [SECURITY.md](SECURITY.md).
 - CI runs [CodeQL](https://github.com/marcobockelbrink/claude-matrix-bot/security/code-scanning)
   and Trivy (filesystem, IaC, and container-image scans) on every push; Dependabot watches
-  pip, Docker, and GitHub Actions dependencies. Secret scanning with push protection is on.
+  the Python lockfile, Docker, and GitHub Actions dependencies. Secret scanning with push
+  protection is on.
 - Found a vulnerability? Please use
   [private vulnerability reporting](https://github.com/marcobockelbrink/claude-matrix-bot/security/advisories/new) —
   see [SECURITY.md](SECURITY.md).
@@ -313,7 +347,17 @@ sealed-secrets / SOPS). See `deploy/helm/ha-matrix-bot/values.yaml` for all opti
 
 `bot.py` is a single-file bridge — the matrix-nio event loop on one side, a persistent
 `ClaudeSDKClient` on the other. `system_prompt.md` is the Home Assistant runbook fed to the
-agent.
+agent. [docs/architecture.md](docs/architecture.md) describes the parts, the flows and the
+known limits.
+
+**Tests.** `tests/` holds unit tests for the decision logic. They need the bot's
+dependencies, so they run inside the image (CI does the same):
+
+```bash
+docker build -t ha-matrix-bot:test .
+docker run --rm -v "$PWD/bot.py:/work/bot.py:ro" -v "$PWD/tests:/work/tests:ro" \
+  -w /work --entrypoint python ha-matrix-bot:test -m unittest discover -s tests -v
+```
 
 **Container image.** Multi-stage build on `python:3.14-slim`: the builder installs exactly the
 versions pinned in `uv.lock` (hash-checked; after changing `pyproject.toml` run `uv lock`), the
