@@ -18,3 +18,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # One PR for all actions: codeql-action/init and /analyze must move
+      # together, separate PRs for them fail CodeQL with a version mismatch.
+      actions:
+        patterns: ["*"]
