@@ -60,7 +60,7 @@ jobs:
           fetch-depth: 0 # so Claude can read callers, tests and history
 
       - name: Claude-Review
-        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        uses: anthropics/claude-code-action@6c690188da61cf16ee7debb28383ba67f02abb4c # v1.0.242
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # No track_progress: it switches the action into tag mode, which requires this
