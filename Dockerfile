@@ -3,8 +3,8 @@
 FROM ghcr.io/astral-sh/uv:0.11@sha256:77280f2f771df71f90786c314fe1bbc1e023feac652969bbf139c280babf2eb7 AS uv
 
 # ── Build stage ───────────────────────────────────────────────────────────
-# Installs the locked dependencies into /install. Every package ships a wheel
-# (matrix-nio's E2E support is vodozemac now, not python-olm), so no compiler.
+# Installs the locked dependencies into /install. No package needs a compiler
+# any more (matrix-nio's E2E support is vodozemac now, not python-olm).
 FROM python:3.14-slim AS builder
 
 WORKDIR /app
