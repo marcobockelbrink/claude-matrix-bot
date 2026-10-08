@@ -851,9 +851,9 @@ async def main() -> None:
                     log.error("Agent turn not usable (%s) — replacing the session", verdict[0])
                     session_ok = await reconnect_session()
                     # Nothing was executed, so the fresh session can redo it.
-                    if session_ok and not turn["used_tools"]:
-                        # Both attempts share one budget; the lock is held meanwhile.
-                        left = max(60, AGENT_TIMEOUT_S - (time.time() - t0))
+                    # Both attempts share one budget; the lock is held meanwhile.
+                    left = AGENT_TIMEOUT_S - (time.time() - t0)
+                    if session_ok and not turn["used_tools"] and left > 30:
                         verdict = await asyncio.wait_for(attempt(), left)
                 if verdict:
                     ok = False
@@ -877,6 +877,7 @@ async def main() -> None:
                 agent_state.update(ok=True, failure=None)
             except asyncio.TimeoutError:
                 ok = False
+                agent_state.update(ok=False, failure="timed out")
                 log.error("Agent run timed out after %ds — aborting", AGENT_TIMEOUT_S)
                 session_ok = await abort_turn()
                 await deliver(targets[0], S["agent_timeout"])
@@ -887,6 +888,7 @@ async def main() -> None:
                 return
             except Exception:
                 ok = False
+                agent_state.update(ok=False, failure="failed with an exception, see the log")
                 log.exception("Agent run failed")
                 await deliver(targets[0], S["error"])
                 return
