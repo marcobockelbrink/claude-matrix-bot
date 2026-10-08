@@ -22,6 +22,7 @@ class ParseNotifyTest(unittest.TestCase):
     def test_non_string_message_is_stringified(self):
         # HA templates may render a bare number.
         self.assertEqual(parse_notify({"message": 21.5}), ("21.5", None, False))
+        self.assertEqual(parse_notify({"message": 0}), ("0", None, False))
 
     def test_body_must_be_an_object(self):
         for body in ([], ["message"], "text", 5, None, True):

@@ -252,7 +252,9 @@ def parse_notify(payload: object) -> tuple[str, str | None, bool]:
     """
     if not isinstance(payload, dict):
         raise ValueError("expected a JSON object")
-    message = str(payload.get("message") or "").strip()
+    message = payload.get("message")
+    # A bare 0 from a sensor template is a message, not a missing one.
+    message = "" if message is None else str(message).strip()
     if not message:
         raise ValueError("missing 'message'")
     room = payload.get("room")
