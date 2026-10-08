@@ -41,6 +41,14 @@ jobs:
           load: true
           tags: local/claude-matrix-bot:scan
           cache-from: type=gha
+      # The image is the only place with the bot's dependencies, so the unit
+      # tests run in it rather than in a second environment.
+      - name: Unit tests
+        run: >
+          docker run --rm
+          -v "$PWD/bot.py:/work/bot.py:ro" -v "$PWD/tests:/work/tests:ro"
+          -w /work --entrypoint python local/claude-matrix-bot:scan
+          -m unittest discover -s tests -v
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: local/claude-matrix-bot:scan
