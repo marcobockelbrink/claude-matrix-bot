@@ -35,9 +35,12 @@ confirmation bypass, prompt-injection paths that cross a trust boundary) are ver
 - **Prompt injection is inherent.** Text that reaches the agent (smart notifications built
   from sensor/device names, transcribed audio) can attempt to steer it. Only feed the
   webhook from sources you trust, and keep `CONFIRM_DESTRUCTIVE` on.
-- **The agent can read its own credentials.** `HA_TOKEN` etc. are in the agent's tool
-  environment (required to call HA); the system prompt forbids echoing them, but a
-  successfully injected agent could leak them. Rotate tokens if you suspect this.
+- **The agent can read its own credentials.** `HA_TOKEN` and the Claude credential are in
+  the agent's tool environment (required to call HA); the system prompt forbids echoing
+  them, but a successfully injected agent could leak them. Rotate tokens if you suspect
+  this. `MATRIX_PASSWORD` and `WEBHOOK_TOKEN` are removed from the environment before the
+  agent starts, but the agent runs as the same user as the bot and can still read the
+  files in `data/` and `store/`, including the stored Matrix session token and E2E keys.
 - **Matrix devices are not verified** (`ignore_unverified_devices`). Anyone who obtains an
   allowlisted account's password can read and command the bot — use strong, unique passwords.
 - **Unfixed base-image CVEs** (Debian packages such as `perl`) appear in image scans; they
@@ -81,9 +84,13 @@ sind sehr willkommen.
 - **Prompt-Injection ist systemimmanent.** Text, der den Agenten erreicht (Smart-Meldungen
   aus Sensor-/Gerätenamen, transkribiertes Audio), kann versuchen, ihn zu steuern. Den
   Webhook nur aus vertrauenswürdigen Quellen füttern und `CONFIRM_DESTRUCTIVE` anlassen.
-- **Der Agent kann seine eigenen Zugangsdaten lesen.** `HA_TOKEN` & Co. stehen in seiner
-  Tool-Umgebung (nötig für HA-Aufrufe); der System-Prompt verbietet die Ausgabe, aber ein
-  erfolgreich injizierter Agent könnte sie leaken. Bei Verdacht: Tokens rotieren.
+- **Der Agent kann seine eigenen Zugangsdaten lesen.** `HA_TOKEN` und das Claude-Token
+  stehen in seiner Tool-Umgebung (nötig für HA-Aufrufe); der System-Prompt verbietet die
+  Ausgabe, aber ein erfolgreich injizierter Agent könnte sie leaken. Bei Verdacht: Tokens
+  rotieren. `MATRIX_PASSWORD` und `WEBHOOK_TOKEN` werden vor dem Start des Agenten aus der
+  Umgebung entfernt; der Agent läuft aber als derselbe Benutzer wie der Bot und kann
+  weiterhin die Dateien in `data/` und `store/` lesen, also auch das gespeicherte
+  Matrix-Sitzungstoken und die E2E-Schlüssel.
 - **Matrix-Geräte werden nicht verifiziert** (`ignore_unverified_devices`). Wer das Passwort
   eines Allowlist-Accounts erlangt, kann den Bot mitlesen und steuern — starke, einmalige
   Passwörter verwenden.

@@ -22,6 +22,7 @@ unattended.
 """
 
 import asyncio
+import ctypes
 import base64
 import hmac
 import html
@@ -229,6 +230,21 @@ def env_list(name: str) -> list[str]:
     return [x.strip() for x in (os.environ.get(name) or "").split(",") if x.strip()]
 
 
+def hide_secrets_from_agent(*names: str) -> None:
+    """Keep bot-only secrets out of reach of the agent's Bash tool.
+
+    The agent's CLI inherits our environment, and running as the same user it
+    could also read our original environment back from /proc.
+    """
+    for name in names:
+        os.environ.pop(name, None)
+    if sys.platform != "linux":
+        return
+    # PR_SET_DUMPABLE = 0 makes /proc/<pid>/environ and /proc/<pid>/mem root-only.
+    if ctypes.CDLL(None, use_errno=True).prctl(4, 0, 0, 0, 0) != 0:
+        log.warning("Could not hide the process environment from the agent.")
+
+
 def chunk(text: str, size: int = CHUNK_CHARS):
     for i in range(0, len(text), size):
         yield text[i : i + size]
@@ -337,6 +353,9 @@ async def main() -> None:
     if signal_enabled and not signal_allowed:
         log.warning("Signal enabled but SIGNAL_ALLOWED_NUMBERS empty — disabling.")
         signal_enabled = False
+
+    # Everything is read; the agent session started below must not see these.
+    hide_secrets_from_agent("MATRIX_PASSWORD", "WEBHOOK_TOKEN")
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
