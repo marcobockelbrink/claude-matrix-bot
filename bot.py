@@ -188,6 +188,7 @@ STRINGS = {
         "confirm_timeout": "⏱️ Keine Bestätigung erhalten — Befehl wurde NICHT ausgeführt.",
         "agent_timeout": "⏱️ Der Agent hat zu lange gebraucht und wurde abgebrochen. Bitte nochmal versuchen.",
         "agent_reset": "⚠️ Der Agent hat nicht richtig geantwortet ({reason}). Die Sitzung wurde neu gestartet — bitte nochmal senden.",
+        "agent_reset_partial": "⚠️ Der Agent hat nicht richtig geantwortet ({reason}). Die Sitzung wurde neu gestartet. Achtung: Ein Teil der Anfrage wurde möglicherweise schon ausgeführt — bitte erst prüfen, bevor du sie nochmal sendest.",
         "agent_unusable": "⚠️ Der Agent kann gerade nicht antworten ({reason}).",
         "denied": "Der Besitzer hat diesen Befehl im Chat abgelehnt.",
         "notify_prefix": "🔔 ",
@@ -208,6 +209,7 @@ STRINGS = {
         "confirm_timeout": "⏱️ No confirmation received — the command was NOT run.",
         "agent_timeout": "⏱️ The agent took too long and was aborted. Please try again.",
         "agent_reset": "⚠️ The agent did not answer properly ({reason}). Its session was restarted — please send that again.",
+        "agent_reset_partial": "⚠️ The agent did not answer properly ({reason}). Its session was restarted. Careful: part of the request may already have been carried out — check before sending it again.",
         "agent_unusable": "⚠️ The agent cannot answer right now ({reason}).",
         "denied": "The owner declined this command in chat.",
         "notify_prefix": "🔔 ",
@@ -280,6 +282,8 @@ ERRORS_A_NEW_SESSION_CANNOT_FIX = {
     "rate_limit",
     "server_error",
 }
+# The turn stopped at a configured limit; its partial answer is still usable.
+LIMIT_SUBTYPES = {"error_max_turns", "error_max_budget_usd"}
 
 
 def judge_turn(result, api_errors: list[str]) -> tuple[str, bool] | None:
@@ -301,6 +305,9 @@ def judge_turn(result, api_errors: list[str]) -> tuple[str, bool] | None:
         if status in (401, 403, 429) or (status or 0) >= 500:
             return f"API error: HTTP {status}", False
         return "the answer is an error" + (f", HTTP {status}" if status else ""), True
+    if result.subtype != "success" and result.subtype not in LIMIT_SUBTYPES:
+        # e.g. error_during_execution, what a crashed session reports.
+        return f"the turn ended with {result.subtype}", True
     return None
 
 
@@ -848,10 +855,13 @@ async def main() -> None:
                         reason = f"{reason}: {detail}"
                     log.error("Agent turn not usable: %s", loggable(reason, 300))
                     agent_state.update(ok=False, failure=reason)
-                    await deliver(
-                        targets[0],
-                        S["agent_reset" if reset else "agent_unusable"].format(reason=reason),
-                    )
+                    if not reset:
+                        text = S["agent_unusable"]
+                    elif turn["used_tools"]:
+                        text = S["agent_reset_partial"]
+                    else:
+                        text = S["agent_reset"]
+                    await deliver(targets[0], text.format(reason=reason))
                     await flush_outbox(targets)
                     if not session_ok:
                         fatal.set()

@@ -20,6 +20,16 @@ class JudgeTurnTest(unittest.TestCase):
         # error_max_turns etc. still carry a usable partial answer.
         self.assertIsNone(judge_turn(result(subtype="error_max_turns", is_error=True), []))
 
+    def test_crashed_session_means_new_session(self):
+        for subtype in ("error_during_execution", "error_max_structured_output_retries"):
+            with self.subTest(subtype=subtype):
+                reason, reset = judge_turn(result(subtype=subtype, is_error=True), [])
+                self.assertTrue(reset)
+                self.assertIn(subtype, reason)
+
+    def test_budget_limit_is_not_a_broken_session(self):
+        self.assertIsNone(judge_turn(result(subtype="error_max_budget_usd", is_error=True), []))
+
     def test_missing_result_means_new_session(self):
         reason, reset = judge_turn(None, [])
         self.assertTrue(reset)
