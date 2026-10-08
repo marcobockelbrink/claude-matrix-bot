@@ -1,22 +1,24 @@
+# Source of the uv binary for the build stage (a named stage so Dependabot
+# keeps the pin current).
+FROM ghcr.io/astral-sh/uv:0.11@sha256:77280f2f771df71f90786c314fe1bbc1e023feac652969bbf139c280babf2eb7 AS uv
+
 # ── Build stage ───────────────────────────────────────────────────────────
-# Compiles the wheels that have no prebuilt distribution (python-olm for
-# matrix-nio[e2e]); the toolchain stays out of the runtime image.
+# Installs the locked dependencies into /install. No package needs a compiler
+# any more (matrix-nio's E2E support is vodozemac now, not python-olm).
 FROM python:3.14-slim AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc \
-        libc6-dev \
-        libolm-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# uv only turns uv.lock into a hashed requirements list (--locked fails the
+# build if the lock no longer matches pyproject.toml); pip does the install and
+# refuses anything whose hash is not in that list.
+COPY --from=uv /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv export --locked --no-emit-project --format requirements-txt -o locked.txt \
+    && pip install --no-cache-dir --require-hashes --prefix=/install -r locked.txt
 
 
 # ── Runtime stage ─────────────────────────────────────────────────────────
-# No compiler, no headers — only what the bot needs at run time:
-#  - libolm3: E2E encryption for matrix-nio
+# Only what the bot needs at run time:
 #  - curl + ca-certificates: how the agent's Bash tool talks to the HA HTTP API
 #  - git: some Agent SDK tools expect it on PATH
 FROM python:3.14-slim
@@ -27,7 +29,6 @@ FROM python:3.14-slim
 # copies of urllib3, msgpack and setuptools that only show up as scanner findings.
 RUN apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
-        libolm3 \
         curl \
         ca-certificates \
         git \

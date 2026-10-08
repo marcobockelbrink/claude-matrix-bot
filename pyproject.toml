@@ -1,0 +1,21 @@
+# Dependency manifest only — the bot is the single file bot.py, not a package.
+# uv.lock pins every package with hashes; the Dockerfile installs exactly that.
+# After changing a dependency here: `uv lock`.
+[project]
+name = "claude-matrix-bot"
+# Placeholder: the real version is baked into the image as BOT_VERSION.
+version = "0.0.0"
+requires-python = ">=3.14"
+dependencies = [
+    "claude-agent-sdk>=0.2.159",
+    "matrix-nio[e2e]>=0.26.0",
+    "python-dotenv>=1.2.3",
+    "aiohttp>=3.14.3",
+    "faster-whisper>=1.2.1",
+    # Not imported by bot.py: the agent uses it for Home Assistant's WebSocket
+    # API (see system_prompt.md). The runtime image has no pip to install it.
+    "websockets>=17.2",
+]
+
+[tool.uv]
+package = false
