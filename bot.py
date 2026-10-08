@@ -1058,16 +1058,20 @@ async def main() -> None:
     async def announce_online() -> None:
         targets = notify_targets()
         if not targets:
-            log.info("No channel known yet — skipping the online message.")
+            # Try again on the next syncs for two minutes; after that a
+            # "back online" would no longer be news.
+            online_notice["due"] = time.time() - started_at < 120
             return
-        try:
-            for target in targets:
+        sent = False
+        for target in targets:
+            try:
                 await deliver(target, S["online"])
-        except Exception:
-            log.exception("Could not send the online message")
-            return
-        state["online_notice_ts"] = time.time()
-        save_state(state)
+                sent = True
+            except Exception:
+                log.exception("Could not send the online message to %s", loggable(str(target), 120))
+        if sent:
+            state["online_notice_ts"] = time.time()
+            save_state(state)
 
     async def on_sync(_response: SyncResponse) -> None:
         last_sync["ts"] = time.time()
