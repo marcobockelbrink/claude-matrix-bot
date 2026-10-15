@@ -7,7 +7,7 @@ Wie der Bot aufgebaut ist, warum, und wo seine Grenzen liegen. Zur Einrichtung s
 
 ## 1. Was es ist
 
-Ein einzelner Python-Prozess (`bot.py`, rund 1.400 Zeilen), der einen Chatraum mit einem
+Ein einzelner Python-Prozess (`bot.py`, rund 1.700 Zeilen), der einen Chatraum mit einem
 KI-Agenten verbindet:
 
 - Auf der einen Seite ist er ein **Matrix-Client** (optional zusätzlich ein Signal-Client),
@@ -50,9 +50,12 @@ Alle Verbindungen außer dem Webhook gehen nach außen. Der Port für Webhook un
 
 ## 3. Im Prozess
 
-Alles läuft auf einer asyncio-Ereignisschleife. `main()` verdrahtet die Teile als Closures
-über gemeinsamem Zustand; die reine Entscheidungslogik liegt in Funktionen auf Modulebene,
-damit sie testbar ist.
+Alles läuft auf einer asyncio-Ereignisschleife. `main()` liest nur die Konfiguration
+(`load_config()` → eine unveränderliche `Config`) und startet einen `Bot`. Die Klasse `Bot`
+besitzt die Agent-Sitzung, die Matrix- und Signal-Verbindungen und die Zeitgeber; die Klasse
+`Webhook` bedient `/notify`, `/status` und `/healthz`. Die reine Entscheidungslogik
+(`judge_turn`, `parse_clock`, `render_status_page`, …) liegt in Funktionen auf Modulebene,
+damit sie einzeln testbar ist.
 
 ```mermaid
 flowchart TB
@@ -304,10 +307,13 @@ Zustand des Agenten steht auf `/status` (`agent_ok`, `agent_failure`).
 
 ## 11. Tests
 
-`tests/` enthält Unit-Tests (`unittest` aus der Standardbibliothek) für die
-Entscheidungsfunktionen auf Modulebene: `parse_notify`, `SmartBudget`, `judge_turn` und
-`should_announce_start`. Sie laufen im gebauten Image, dem einzigen Ort mit den
-Abhängigkeiten des Bots:
+`tests/` enthält Unit-Tests (`unittest` aus der Standardbibliothek). Neben den
+Entscheidungsfunktionen auf Modulebene (`parse_notify`, `SmartBudget`, `judge_turn`,
+`should_announce_start`, `load_config`, `parse_clock`, `next_occurrence`, die Statusseite)
+treiben sie `Bot` und `Webhook` gegen Attrappen (`tests/fakes.py`): einen Agent-Lauf samt
+Fehlerpfaden (API-Fehler, Sitzung ersetzen, Timeout, Ausnahme), das Bestätigungs-Gate, die
+Matrix- und Signal-Handler, die Outbox und die HTTP-Routen. Sie laufen im gebauten Image,
+dem einzigen Ort mit den Abhängigkeiten des Bots:
 
 ```bash
 docker run --rm -v "$PWD/bot.py:/work/bot.py:ro" -v "$PWD/tests:/work/tests:ro" \
@@ -316,10 +322,10 @@ docker run --rm -v "$PWD/bot.py:/work/bot.py:ro" -v "$PWD/tests:/work/tests:ro" 
 
 ## 12. Bekannte Grenzen
 
-- **`main()` ist eine einzige große Funktion.** Die Handler sind Closures darin und haben
-  keine Tests; nur die herausgezogenen Entscheidungsfunktionen haben welche. Timeout-
-  Behandlung, Ersetzen der Sitzung und die Verdrahtung des Webhooks sind in der CI nie gegen
-  eine echte SDK-Sitzung gelaufen.
+- **In der CI läuft nichts gegen einen echten Dienst.** Die Tests nutzen eine Attrappe der
+  Agent-Sitzung und keinen Matrix-Server. Matrix-Anmeldung und Sitzungswiederherstellung, der
+  E2E-Upload, der Signal-WebSocket und das Verhalten des echten SDK bei Interrupt und
+  Neuverbindung sind deshalb ungetestet.
 - **Die Bestätigungsschranke gilt nur für `Bash`.** Die anderen Werkzeuge sind vorab
   freigegeben, und mit `CONFIRM_DESTRUCTIVE=false` gibt es gar keine Schranke.
 - **Der Agent teilt sich den Benutzer mit dem Bot.** Er kann das Matrix-Sitzungstoken und die
