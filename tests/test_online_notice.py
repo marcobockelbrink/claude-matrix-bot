@@ -19,6 +19,14 @@ class ShouldAnnounceStartTest(unittest.TestCase):
         # Nobody wants a message at 03:00 every night.
         self.assertFalse(should_announce_start({"planned_restart": True}, NOW))
 
+    def test_scheduled_restart_announced_when_opted_in(self):
+        state = {"planned_restart": True, "online_notice_ts": NOW - 86400}
+        self.assertTrue(should_announce_start(state, NOW, after_planned=True))
+
+    def test_opt_in_still_respects_the_loop_guard(self):
+        state = {"planned_restart": True, "online_notice_ts": NOW - 30}
+        self.assertFalse(should_announce_start(state, NOW, after_planned=True))
+
     def test_restart_loop_does_not_spam(self):
         state = {"online_notice_ts": NOW - 30}
         self.assertFalse(should_announce_start(state, NOW))

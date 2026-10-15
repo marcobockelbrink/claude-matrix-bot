@@ -368,13 +368,14 @@ def save_state(state: dict) -> None:
         log.exception("Could not persist state file")
 
 
-def should_announce_start(state: dict, now: float) -> bool:
+def should_announce_start(state: dict, now: float, after_planned: bool = False) -> bool:
     """Whether this start is worth a "back online" message to the owner.
 
-    Not after the scheduled restart (nobody wants that every night), and not
-    again within ONLINE_NOTICE_MIN_GAP_S of the last one (restart loops).
+    Not after the scheduled restart (nobody wants that every night) unless the
+    owner opted in with after_planned, and not again within
+    ONLINE_NOTICE_MIN_GAP_S of the last one (restart loops).
     """
-    if state.get("planned_restart"):
+    if state.get("planned_restart") and not after_planned:
         return False
     last = state.get("online_notice_ts")
     if not isinstance(last, (int, float)):
@@ -445,6 +446,9 @@ async def main() -> None:
     notify_smart_limit = int(os.environ.get("NOTIFY_SMART_LIMIT") or 6)
     briefing_time = os.environ.get("BRIEFING_TIME") or ""
     restart_time = os.environ.get("RESTART_TIME") or "03:00"
+    announce_planned_restart = (
+        os.environ.get("ANNOUNCE_SCHEDULED_RESTART") or "false"
+    ).lower() in ("1", "true", "yes", "on")
     tz = ZoneInfo(os.environ.get("TZ") or "Europe/Berlin")
     whisper_model_name = os.environ.get("WHISPER_MODEL", "small")
     confirm_destructive = (os.environ.get("CONFIRM_DESTRUCTIVE") or "true").lower() in (
@@ -470,7 +474,9 @@ async def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
     state = load_state()
-    online_notice = {"due": should_announce_start(state, time.time())}
+    online_notice = {
+        "due": should_announce_start(state, time.time(), announce_planned_restart)
+    }
     if state.pop("planned_restart", None):
         save_state(state)
 

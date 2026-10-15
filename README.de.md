@@ -119,7 +119,9 @@ Optionale Funktionen (siehe Kommentare in `.env.example`): `BOT_LANG` (de/en),
 Benachrichtigungen pro 10 Minuten, Standard 6), `BRIEFING_TIME` (tägliches Briefing, z.B.
 `07:00`), `WHISPER_MODEL` (Sprachtranskription, `off` zum Deaktivieren),
 `CONFIRM_DESTRUCTIVE`, `AGENT_TIMEOUT_S` (Obergrenze für einen Agent-Lauf, Standard 900),
-`RESTART_TIME` (täglicher Neustart, Standard `03:00`, `off` zum Deaktivieren).
+`RESTART_TIME` (täglicher Neustart, Standard `03:00`, `off` zum Deaktivieren),
+`ANNOUNCE_SCHEDULED_RESTART` (`true` meldet „wieder online“ auch nach dem täglichen Neustart,
+Standard `false`).
 
 Die `.env` steht in der `.gitignore` — sie wird nie committet.
 
