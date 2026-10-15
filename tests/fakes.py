@@ -11,28 +11,28 @@ import bot
 
 
 def make_config(**overrides) -> bot.Config:
-    fields = dict(
-        claude_auth={},
-        ha_base_url="http://ha.local:8123",
-        ha_token="ha-token",
-        homeserver="https://matrix.example",
-        matrix_user="@bot:example",
-        matrix_password="pw",
-        allowed_users=frozenset({"@owner:example"}),
-        model=None,
-        lang="en",
-        webhook_port=0,
-        webhook_token="t" * 32,
-        notify_smart_limit=6,
-        briefing_time="",
-        restart_time="off",
-        announce_planned_restart=False,
-        tz=ZoneInfo("Europe/Berlin"),
-        whisper_model="off",
-        confirm_destructive=True,
-        notify_room="",
-        signal=bot.SignalConfig(),
-    )
+    fields = {
+        "claude_auth": {},
+        "ha_base_url": "http://ha.local:8123",
+        "ha_token": "ha-token",
+        "homeserver": "https://matrix.example",
+        "matrix_user": "@bot:example",
+        "matrix_password": "pw",
+        "allowed_users": frozenset({"@owner:example"}),
+        "model": None,
+        "lang": "en",
+        "webhook_port": 0,
+        "webhook_token": "t" * 32,
+        "notify_smart_limit": 6,
+        "briefing_time": "",
+        "restart_time": "off",
+        "announce_planned_restart": False,
+        "tz": ZoneInfo("Europe/Berlin"),
+        "whisper_model": "off",
+        "confirm_destructive": True,
+        "notify_room": "",
+        "signal": bot.SignalConfig(),
+    }
     fields.update(overrides)
     return bot.Config(**fields)
 

@@ -795,17 +795,17 @@ class Bot:
         if cfg.confirm_destructive:
             # Bash is deliberately NOT pre-approved: every Bash call goes through
             # can_use_tool, which auto-allows everything non-destructive.
-            gate: dict = dict(
-                allowed_tools=["Read", "Write", "Edit", "WebFetch", "WebSearch"],
-                permission_mode="default",
-                can_use_tool=self.can_use_tool,
-            )
+            gate: dict = {
+                "allowed_tools": ["Read", "Write", "Edit", "WebFetch", "WebSearch"],
+                "permission_mode": "default",
+                "can_use_tool": self.can_use_tool,
+            }
         else:
             # Original v1 behavior: no gate at all beyond the sender allowlist.
-            gate = dict(
-                allowed_tools=["Bash", "Read", "Write", "Edit", "WebFetch", "WebSearch"],
-                permission_mode="bypassPermissions",
-            )
+            gate = {
+                "allowed_tools": ["Bash", "Read", "Write", "Edit", "WebFetch", "WebSearch"],
+                "permission_mode": "bypassPermissions",
+            }
         return ClaudeAgentOptions(
             system_prompt=Path(__file__).with_name("system_prompt.md").read_text(),
             # Relative file operations land in the persistent data volume.
