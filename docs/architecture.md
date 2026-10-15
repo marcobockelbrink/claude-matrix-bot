@@ -7,7 +7,7 @@ How the bot is put together, why, and where its limits are. For setup see the
 
 ## 1. What it is
 
-One Python process (`bot.py`, about 1,400 lines) that bridges a chat room to an AI agent:
+One Python process (`bot.py`, about 1,700 lines) that bridges a chat room to an AI agent:
 
 - On one side it is a **Matrix client** (optionally also a Signal client) that listens for
   messages from an allowlist of people.
@@ -48,8 +48,11 @@ optional and meant for the local network.
 
 ## 3. Inside the process
 
-Everything runs on one asyncio event loop. `main()` wires the parts together as closures over
-shared state; the pure decision logic lives in module-level functions so it can be tested.
+Everything runs on one asyncio event loop. `main()` only reads the configuration
+(`load_config()` → a frozen `Config`) and starts a `Bot`. The `Bot` class owns the agent
+session, the Matrix and Signal connections and the timers; the `Webhook` class serves
+`/notify`, `/status` and `/healthz`. The pure decision logic (`judge_turn`, `parse_clock`,
+`render_status_page`, …) lives in module-level functions so it can be tested on its own.
 
 ```mermaid
 flowchart TB
@@ -290,9 +293,13 @@ agent's state is on `/status` (`agent_ok`, `agent_failure`).
 
 ## 11. Tests
 
-`tests/` holds unit tests (stdlib `unittest`) for the module-level decision functions:
-`parse_notify`, `SmartBudget`, `judge_turn` and `should_announce_start`. They run inside the
-built image, the only place that has the bot's dependencies:
+`tests/` holds unit tests (stdlib `unittest`). Besides the module-level decision functions
+(`parse_notify`, `SmartBudget`, `judge_turn`, `should_announce_start`, `load_config`,
+`parse_clock`, `next_occurrence`, the status page) they drive `Bot` and `Webhook` against
+fakes (`tests/fakes.py`): an agent run with its failure paths (API error, session
+replacement, timeout, exception), the confirmation gate, Matrix and Signal handlers, the
+outbox, and the HTTP routes. They run inside the built image, the only place that has the
+bot's dependencies:
 
 ```bash
 docker run --rm -v "$PWD/bot.py:/work/bot.py:ro" -v "$PWD/tests:/work/tests:ro" \
@@ -301,9 +308,9 @@ docker run --rm -v "$PWD/bot.py:/work/bot.py:ro" -v "$PWD/tests:/work/tests:ro" 
 
 ## 12. Known limits
 
-- **`main()` is one large function.** The handlers are closures inside it and have no tests;
-  only the extracted decision functions do. Timeout handling, session replacement and the
-  webhook wiring have not been exercised against a live SDK session in CI.
+- **Nothing runs against a live service in CI.** The tests use a fake agent session and no
+  Matrix server, so the Matrix login and session restore, the E2E upload, the Signal
+  WebSocket and the real SDK's behaviour on interrupt and reconnect are untested.
 - **The confirmation gate covers `Bash` only.** The other tools are pre-approved, and with
   `CONFIRM_DESTRUCTIVE=false` there is no gate at all.
 - **The agent shares the bot's user.** It can read the Matrix session token and the E2E keys
