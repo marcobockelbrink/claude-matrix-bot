@@ -112,7 +112,9 @@ Optional features (see comments in `.env.example`): `BOT_LANG` (de/en), `WEBHOOK
 for notifications), `NOTIFY_SMART_LIMIT` (agent runs from notifications per 10 minutes,
 default 6), `BRIEFING_TIME` (daily briefing, e.g. `07:00`), `WHISPER_MODEL` (voice
 transcription, `off` to disable), `CONFIRM_DESTRUCTIVE`, `AGENT_TIMEOUT_S` (cap on one agent
-run, default 900), `RESTART_TIME` (daily restart, default `03:00`, `off` to disable).
+run, default 900), `RESTART_TIME` (daily restart, default `03:00`, `off` to disable),
+`ANNOUNCE_SCHEDULED_RESTART` (`true` also sends "back online" after the daily restart, default
+`false`).
 
 `.env` is gitignored — it never gets committed.
 
