@@ -7,10 +7,10 @@ name = "claude-matrix-bot"
 version = "0.0.0"
 requires-python = ">=3.14"
 dependencies = [
-    "claude-agent-sdk>=0.2.159",
+    "claude-agent-sdk>=0.2.168",
     "matrix-nio[e2e]>=0.26.0",
     "python-dotenv>=1.2.3",
-    "aiohttp>=3.14.3",
+    "aiohttp>=3.14.5",
     "faster-whisper>=1.2.1",
     # Not imported by bot.py: the agent uses it for Home Assistant's WebSocket
     # API (see system_prompt.md). The runtime image has no pip to install it.
