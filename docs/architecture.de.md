@@ -289,7 +289,7 @@ flowchart LR
 - **Die Version** stammt aus `git describe` und ist ins Image eingebaut; der Bot zeigt sie im
   Start-Log, auf `/status` und in der Online-Meldung.
 - **Abhängigkeiten** stehen in `pyproject.toml`; `uv.lock` legt alle mit Hashes fest.
-  Dependabot hält Lockfile, Basis-Images und GitHub Actions aktuell.
+  Renovate hält Lockfile, Basis-Images und GitHub Actions aktuell.
 
 ## 10. Betrieb
 

@@ -338,7 +338,7 @@ sealed-secrets / SOPS). See `deploy/helm/ha-matrix-bot/values.yaml` for all opti
 - The Matrix password and the webhook token are removed from the agent's reach before its
   session starts. What the agent can still read is listed in [SECURITY.md](SECURITY.md).
 - CI runs [CodeQL](https://github.com/marcobockelbrink/claude-matrix-bot/security/code-scanning)
-  and Trivy (filesystem, IaC, and container-image scans) on every push; Dependabot watches
+  and Trivy (filesystem, IaC, and container-image scans) on every push; Renovate watches
   the Python lockfile, Docker, and GitHub Actions dependencies. Secret scanning with push
   protection is on.
 - Found a vulnerability? Please use

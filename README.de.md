@@ -351,7 +351,7 @@ via sealed-secrets / SOPS). Alle Optionen: `deploy/helm/ha-matrix-bot/values.yam
 - Matrix-Passwort und Webhook-Token werden dem Agenten entzogen, bevor seine Sitzung startet.
   Was der Agent weiterhin lesen kann, steht in [SECURITY.md](SECURITY.md).
 - Die CI führt bei jedem Push [CodeQL](https://github.com/marcobockelbrink/claude-matrix-bot/security/code-scanning)
-  und Trivy aus (Dateisystem-, IaC- und Container-Image-Scans); Dependabot überwacht das
+  und Trivy aus (Dateisystem-, IaC- und Container-Image-Scans); Renovate überwacht das
   Python-Lockfile sowie Docker- und GitHub-Actions-Abhängigkeiten. Secret Scanning mit
   Push-Schutz ist aktiv.
 - Schwachstelle gefunden? Bitte die
