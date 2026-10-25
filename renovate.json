@@ -1,4 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>marcobockelbrink/renovate-config"]
+  "extends": ["github>marcobockelbrink/renovate-config"],
+  "packageRules": [
+    {
+      "description": "Action updates can reach the self-hosted Mac runner, so a human merges them",
+      "matchManagers": ["github-actions"],
+      "automerge": false
+    }
+  ]
 }
