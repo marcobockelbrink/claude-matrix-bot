@@ -6,6 +6,12 @@
       "description": "Action updates can reach the self-hosted Mac runner, so a human merges them",
       "matchManagers": ["github-actions"],
       "automerge": false
+    },
+    {
+      "description": "Stay on Python 3.14 until onnxruntime (via faster-whisper) and pyyaml ship cp315 Linux wheels; the slim image has no compiler",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": "/^3\\.14[.-]/"
     }
   ]
 }
