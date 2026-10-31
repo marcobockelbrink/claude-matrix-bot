@@ -148,7 +148,7 @@ Shell-Befehl läuft also durch `can_use_tool`. Befehle, auf die `DESTRUCTIVE_RE`
 `kill`, HTTP `DELETE`, Neustart/Stopp von Home Assistant, Löschen von Backups, …), warten,
 bis der Besitzer im Chat mit ja oder nein antwortet oder 180 Sekunden vergangen sind (dann
 wird der Befehl abgelehnt). Das gilt auch für jeden Befehl, der den Host der Signal-REST-API
-nennt, denn diese API hat keine eigene Anmeldung. Alles andere wird sofort erlaubt.
+als eigenes Wort nennt, denn diese API hat keine eigene Anmeldung. Alles andere wird sofort erlaubt.
 
 `Read`, `Write`, `Edit`, `WebFetch` und `WebSearch` sind vorab freigegeben und erreichen
 diese Schranke nie.
