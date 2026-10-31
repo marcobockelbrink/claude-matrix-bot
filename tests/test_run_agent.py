@@ -189,7 +189,12 @@ class ConfirmationTest(unittest.IsolatedAsyncioTestCase):
             api="http://signal:8080", number="+1", allowed=frozenset({"+2"}), enabled=True
         )
         b = make_bot(signal=signal)
-        for cmd in ("curl http://signal:8080/v1/about", "wget -qO- https://signal/v2/send"):
+        for cmd in (
+            "curl http://signal:8080/v1/about",
+            "wget -qO- https://signal/v2/send",
+            "curl -X POST signal:8080/v2/send -d @msg.json",
+            "H=signal; curl $H:8080 || curl SIGNAL.:8080",
+        ):
             with self.subTest(cmd=cmd):
                 self.assertTrue(b.touches_signal_api(cmd))
         for cmd in (

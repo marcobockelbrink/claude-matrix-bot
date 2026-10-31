@@ -947,9 +947,10 @@ class Bot:
         host = urlsplit(signal.api).hostname or ""
         if not host:
             return False
-        # The host as part of a URL (after // or user@), not as a bare word:
-        # with the usual host "signal", sensor.wifi_signal must not match.
-        pattern = rf"(//|@){re.escape(host.lower())}(?![\w.-])"
+        # The host as a word of its own (with or without scheme, "signal:8080"
+        # too), but not inside an entity id: with the usual host "signal",
+        # sensor.wifi_signal must not match.
+        pattern = rf"(?<![\w.-]){re.escape(host.lower())}(?![\w-])"
         return re.search(pattern, cmd.lower()) is not None
 
     async def can_use_tool(self, tool_name, tool_input, context):
