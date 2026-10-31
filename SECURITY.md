@@ -41,6 +41,12 @@ confirmation bypass, prompt-injection paths that cross a trust boundary) are ver
   this. `MATRIX_PASSWORD` and `WEBHOOK_TOKEN` are removed from the environment before the
   agent starts, but the agent runs as the same user as the bot and can still read the
   files in `data/` and `store/`, including the stored Matrix session token and E2E keys.
+- **The Signal REST API has no authentication.** The agent shares the bot's container and
+  network, so it can reach the sidecar. Shell commands that name its host need a chat
+  confirmation, but like `CONFIRM_DESTRUCTIVE` this is an accident guard (an IP address or a
+  script slips past it). The bot's code, `bot.py` and `system_prompt.md`, is owned by root,
+  and with the shipped compose and Kubernetes files the root filesystem is read-only, so the
+  agent cannot change the bot itself.
 - **Matrix devices are not verified** (`ignore_unverified_devices`). Anyone who obtains an
   allowlisted account's password can read and command the bot — use strong, unique passwords.
 - **Unfixed base-image CVEs** (Debian packages such as `perl`) appear in image scans; they
@@ -91,6 +97,13 @@ sind sehr willkommen.
   Umgebung entfernt; der Agent läuft aber als derselbe Benutzer wie der Bot und kann
   weiterhin die Dateien in `data/` und `store/` lesen, also auch das gespeicherte
   Matrix-Sitzungstoken und die E2E-Schlüssel.
+- **Die Signal-REST-API hat keine Anmeldung.** Der Agent teilt Container und Netz mit dem
+  Bot und erreicht den Sidecar daher. Shell-Befehle, die dessen Host nennen, brauchen eine
+  Bestätigung im Chat. Wie `CONFIRM_DESTRUCTIVE` ist das aber nur ein Unfallschutz (eine
+  IP-Adresse oder ein Skript kommt daran vorbei). Der Code des Bots, `bot.py` und
+  `system_prompt.md`, gehört root, und mit den mitgelieferten Compose- und Kubernetes-Dateien
+  ist das Root-Dateisystem schreibgeschützt. Der Agent kann den Bot selbst also nicht
+  verändern.
 - **Matrix-Geräte werden nicht verifiziert** (`ignore_unverified_devices`). Wer das Passwort
   eines Allowlist-Accounts erlangt, kann den Bot mitlesen und steuern — starke, einmalige
   Passwörter verwenden.

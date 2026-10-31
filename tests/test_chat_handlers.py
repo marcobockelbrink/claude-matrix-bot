@@ -89,14 +89,25 @@ class SignalEnvelopeTest(unittest.IsolatedAsyncioTestCase):
                 await self.handle(data)
         self.b.run_agent.assert_not_called()
 
-    async def test_a_pending_confirmation_swallows_the_reply(self):
+    def pending(self, target=("signal", "+491")):
         self.b.pending_confirm["future"] = asyncio.get_running_loop().create_future()
+        self.b.pending_confirm["target"] = target
+        return self.b.pending_confirm["future"]
+
+    async def test_a_pending_confirmation_swallows_the_reply(self):
+        fut = self.pending()
         await self.handle(self.envelope(message="yes"))
-        self.assertTrue(self.b.pending_confirm["future"].result())
+        self.assertTrue(fut.result())
         self.b.run_agent.assert_not_called()
 
+    async def test_a_confirmation_asked_elsewhere_cannot_be_answered_here(self):
+        fut = self.pending(("matrix", "!r:example"))
+        await self.handle(self.envelope(message="yes"))
+        self.assertFalse(fut.done())
+        self.b.run_agent.assert_awaited_once_with([("signal", "+491")], "yes")
+
     async def test_unclear_answer_to_a_confirmation_gets_a_hint(self):
-        self.b.pending_confirm["future"] = asyncio.get_running_loop().create_future()
+        self.pending()
         await self.handle(self.envelope(message="maybe"))
         self.b.signal_send.assert_awaited_once_with("+491", S["confirm_hint"])
         self.b.run_agent.assert_not_called()
@@ -140,29 +151,44 @@ class MatrixEventTest(unittest.IsolatedAsyncioTestCase):
         self.b.run_agent.assert_not_called()
         self.assertNotIn("last_room_id", self.b.state)
 
+    def pending(self, room_id="!r:example"):
+        fut = asyncio.get_running_loop().create_future()
+        self.b.pending_confirm["future"] = fut
+        self.b.pending_confirm["target"] = ("matrix", room_id)
+        return fut
+
+    def reaction(self, sender=OWNER, key="👍️"):
+        return SimpleNamespace(
+            type="m.reaction", sender=sender, source={"content": {"m.relates_to": {"key": key}}}
+        )
+
     async def test_confirmation_answer_is_not_a_new_request(self):
         self.b.start_ms = 0
-        self.b.pending_confirm["future"] = asyncio.get_running_loop().create_future()
+        fut = self.pending()
         await self.message(self.event(body="no"))
-        self.assertFalse(self.b.pending_confirm["future"].result())
+        self.assertFalse(fut.result())
         self.b.run_agent.assert_not_called()
 
+    async def test_answer_from_another_room_does_not_confirm(self):
+        self.b.start_ms = 0
+        fut = self.pending("!asked:example")
+        await self.message(self.event(body="yes"), room_id="!other:example")
+        self.assertFalse(fut.done())
+        self.b.run_agent.assert_awaited_once_with([("matrix", "!other:example")], "yes")
+
     async def test_reaction_answers_a_confirmation(self):
-        fut = asyncio.get_running_loop().create_future()
-        self.b.pending_confirm["future"] = fut
-        reaction = SimpleNamespace(
-            type="m.reaction", sender=OWNER, source={"content": {"m.relates_to": {"key": "👍️"}}}
-        )
-        await self.b.on_unknown(None, reaction)
+        fut = self.pending()
+        await self.b.on_unknown(SimpleNamespace(room_id="!r:example"), self.reaction())
         self.assertTrue(fut.result())
 
+    async def test_reaction_in_another_room_is_ignored(self):
+        fut = self.pending()
+        await self.b.on_unknown(SimpleNamespace(room_id="!other:example"), self.reaction())
+        self.assertFalse(fut.done())
+
     async def test_reaction_from_a_stranger_is_ignored(self):
-        fut = asyncio.get_running_loop().create_future()
-        self.b.pending_confirm["future"] = fut
-        reaction = SimpleNamespace(
-            type="m.reaction", sender="@stranger:example", source={"content": {"m.relates_to": {"key": "👍"}}}
-        )
-        await self.b.on_unknown(None, reaction)
+        fut = self.pending()
+        await self.b.on_unknown(SimpleNamespace(room_id="!r:example"), self.reaction(sender="@stranger:example"))
         self.assertFalse(fut.done())
 
     async def test_invites_are_accepted_only_from_the_allowlist(self):
