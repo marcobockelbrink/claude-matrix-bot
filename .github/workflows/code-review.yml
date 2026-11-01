@@ -31,6 +31,20 @@ jobs:
         with:
           fetch-depth: 0 # full history for blame / "new code" detection
 
+      # Coverage for the quality gate's "coverage on new code". Python 3.14 as in
+      # the image: onnxruntime (via faster-whisper) has no cp315 wheels yet.
+      # Only on PRs opened by a human (the gate checks coverage on new code, and
+      # bot PRs add none). Not on bot PRs or pushes to main, so a Renovate lock
+      # update is not run here straight away. Once merged, the next human PR
+      # runs those packages too: the real guard is Renovate's minimumReleaseAge.
+      - name: Unit tests with coverage
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.type != 'Bot'
+        run: |
+          export PATH="/opt/homebrew/bin:$PATH"
+          uv run --frozen -p 3.14 --with coverage \
+            coverage run --source=. --omit='tests/*' -m unittest discover -s tests
+          uv run --frozen -p 3.14 --with coverage coverage xml -o coverage.xml
+
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
         with:
