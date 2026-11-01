@@ -117,6 +117,8 @@ class FailureTest(unittest.IsolatedAsyncioTestCase):
         b = make_bot(FakeClaude(RuntimeError("boom")))
         await b.run_agent([TARGET], "hi", announce=False)
         self.assertEqual(delivered(b), [S["error"]])
+        # The failed run's files must not wait for the next run's chat.
+        b.flush_outbox.assert_awaited_once_with([TARGET])
         self.assertEqual(b.agent_state["failure"], "failed with an exception, see the log")
         self.assertFalse(b.run_history[0]["ok"])
         self.assertEqual(b.current_run, {})
@@ -158,15 +160,51 @@ class ConfirmationTest(unittest.IsolatedAsyncioTestCase):
         b = make_bot()
         pending = await self.ask(b, "rm -rf /x")
         self.assertFalse(pending.done())
-        self.assertEqual(b.maybe_answer_confirmation("nonsense"), "hint")
-        self.assertEqual(b.maybe_answer_confirmation("yes"), "handled")
+        self.assertEqual(b.maybe_answer_confirmation("nonsense", TARGET), "hint")
+        self.assertIsNone(b.maybe_answer_confirmation("yes", ("signal", "+491")))
+        self.assertFalse(pending.done())
+        self.assertEqual(b.maybe_answer_confirmation("yes", TARGET), "handled")
         self.assertEqual(type((await pending)).__name__, "PermissionResultAllow")
 
     async def test_refusal_denies(self):
         b = make_bot()
         pending = await self.ask(b, "rm -rf /x")
-        self.assertEqual(b.maybe_answer_confirmation("no"), "handled")
+        self.assertEqual(b.maybe_answer_confirmation("no", TARGET), "handled")
         self.assertEqual(type((await pending)).__name__, "PermissionResultDeny")
+
+    async def test_calls_to_the_signal_api_need_a_confirmation(self):
+        signal = bot.SignalConfig(
+            api="http://signal-api:8080", number="+1", allowed=frozenset({"+2"}), enabled=True
+        )
+        b = make_bot(signal=signal)
+        pending = await self.ask(b, "curl -X POST http://SIGNAL-API:8080/v2/send -d '{}'")
+        self.assertFalse(pending.done())
+        self.assertEqual(b.maybe_answer_confirmation("no", TARGET), "handled")
+        self.assertEqual(type(await pending).__name__, "PermissionResultDeny")
+        result = await b.can_use_tool("Bash", {"command": "curl http://ha.local:8123/api/"}, None)
+        self.assertEqual(type(result).__name__, "PermissionResultAllow")
+
+    def test_signal_host_matches_only_as_part_of_a_url(self):
+        signal = bot.SignalConfig(
+            api="http://signal:8080", number="+1", allowed=frozenset({"+2"}), enabled=True
+        )
+        b = make_bot(signal=signal)
+        for cmd in (
+            "curl http://signal:8080/v1/about",
+            "wget -qO- https://signal/v2/send",
+            "curl -X POST signal:8080/v2/send -d @msg.json",
+            "H=signal; curl $H:8080 || curl SIGNAL.:8080",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(b.touches_signal_api(cmd))
+        for cmd in (
+            "curl $HA_BASE_URL/api/states/sensor.phone_wifi_signal",
+            "jq 'select(.entity_id|test(\"signal_strength\"))'",
+            "curl http://signal-strength.local/",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertFalse(b.touches_signal_api(cmd))
+        self.assertFalse(make_bot().touches_signal_api("curl http://signal:8080/"))
 
     async def test_aborted_run_cannot_use_tools(self):
         b = make_bot()
@@ -175,7 +213,7 @@ class ConfirmationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(type(result).__name__, "PermissionResultDeny")
 
     async def test_no_pending_confirmation_means_the_message_is_a_normal_one(self):
-        self.assertIsNone(make_bot().maybe_answer_confirmation("yes"))
+        self.assertIsNone(make_bot().maybe_answer_confirmation("yes", TARGET))
 
 
 if __name__ == "__main__":

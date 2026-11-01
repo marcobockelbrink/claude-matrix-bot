@@ -138,6 +138,23 @@ class NextOccurrenceTest(unittest.TestCase):
             bot.next_occurrence(now, 3, 0), datetime(2026, 11, 1, 3, 0, tzinfo=BERLIN)
         )
 
+    def test_sleep_spans_real_hours_across_a_dst_change(self):
+        # 07:00 to 07:00 over the autumn change is 25 real hours, spring 23.
+        for start, end, hours in (
+            ((2026, 10, 24), (2026, 10, 25), 25),
+            ((2026, 3, 28), (2026, 3, 29), 23),
+        ):
+            now = datetime(*start, 7, 0, tzinfo=BERLIN)
+            target = bot.next_occurrence(now, 7, 0)
+            self.assertEqual(target, datetime(*end, 7, 0, tzinfo=BERLIN))
+            with mock.patch("bot.time.time", return_value=now.timestamp()):
+                self.assertEqual(bot.seconds_until(target), hours * 3600)
+
+    def test_a_target_in_the_past_means_no_wait(self):
+        with mock.patch("bot.time.time", return_value=2_000_000_000.0):
+            past = datetime.fromtimestamp(1_000_000_000, BERLIN)
+            self.assertEqual(bot.seconds_until(past), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

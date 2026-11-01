@@ -42,9 +42,11 @@ COPY bot.py system_prompt.md ./
 
 # The Agent SDK's bypassPermissions mode refuses to run as root — use an
 # unprivileged user. It also needs a writable $HOME for its CLI state.
+# The code stays owned by root: the agent runs as "bot" and must not be able
+# to rewrite bot.py or system_prompt.md. Only the state dirs are writable.
 RUN useradd -m -u 1000 bot \
     && mkdir -p /app/store /app/data /app/outbox \
-    && chown -R bot:bot /app
+    && chown bot:bot /app/store /app/data /app/outbox
 USER bot
 ENV HOME=/home/bot
 

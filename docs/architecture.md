@@ -135,15 +135,17 @@ sequenceDiagram
 
 A voice message takes the same path after local transcription. A reply or a 👍/👎 reaction
 that arrives while a confirmation is pending answers that confirmation instead of starting a
-new run.
+new run, but only in the room or Signal chat the question was asked in. Anywhere else it is
+an ordinary message.
 
 ### 4.2 Destructive commands
 
 With `CONFIRM_DESTRUCTIVE=true` (default) `Bash` is not pre-approved, so every shell command
 passes `can_use_tool`. Commands matching `DESTRUCTIVE_RE` (`rm`, `kill`, HTTP `DELETE`,
 Home Assistant restart/stop, backup deletion, …) are held until the owner answers yes or no
-in the chat, or 180 seconds pass (then the command is denied). Everything else is allowed
-at once.
+in the chat, or 180 seconds pass (then the command is denied). The same holds for any command
+that names the host of the Signal REST API as a word of its own, which has no authentication of its own. Everything
+else is allowed at once.
 
 `Read`, `Write`, `Edit`, `WebFetch` and `WebSearch` are pre-approved and never reach this
 gate.

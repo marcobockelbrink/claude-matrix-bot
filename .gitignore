@@ -17,3 +17,5 @@ venv/
 # Signal account state (keys, registration)
 signal-data/
 data/
+coverage.xml
+.coverage

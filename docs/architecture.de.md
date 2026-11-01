@@ -138,7 +138,8 @@ sequenceDiagram
 
 Eine Sprachnachricht nimmt nach der lokalen Transkription denselben Weg. Eine Antwort oder
 eine 👍/👎-Reaktion, die während einer offenen Rückfrage eintrifft, beantwortet diese
-Rückfrage und startet keinen neuen Lauf.
+Rückfrage und startet keinen neuen Lauf, allerdings nur in dem Raum oder Signal-Chat, in dem
+gefragt wurde. Überall sonst ist sie eine normale Nachricht.
 
 ### 4.2 Destruktive Befehle
 
@@ -146,7 +147,8 @@ Mit `CONFIRM_DESTRUCTIVE=true` (Standard) ist `Bash` nicht vorab freigegeben, je
 Shell-Befehl läuft also durch `can_use_tool`. Befehle, auf die `DESTRUCTIVE_RE` passt (`rm`,
 `kill`, HTTP `DELETE`, Neustart/Stopp von Home Assistant, Löschen von Backups, …), warten,
 bis der Besitzer im Chat mit ja oder nein antwortet oder 180 Sekunden vergangen sind (dann
-wird der Befehl abgelehnt). Alles andere wird sofort erlaubt.
+wird der Befehl abgelehnt). Das gilt auch für jeden Befehl, der den Host der Signal-REST-API
+als eigenes Wort nennt, denn diese API hat keine eigene Anmeldung. Alles andere wird sofort erlaubt.
 
 `Read`, `Write`, `Edit`, `WebFetch` und `WebSearch` sind vorab freigegeben und erreichen
 diese Schranke nie.
