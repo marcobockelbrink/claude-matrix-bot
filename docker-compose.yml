@@ -32,7 +32,7 @@ services:
   # (or set COMPOSE_PROFILES=signal in your shell/.env). Also set the SIGNAL_*
   # variables in .env so the bot actually uses it.
   signal:
-    image: bbernhard/signal-cli-rest-api:latest
+    image: bbernhard/signal-cli-rest-api:latest@sha256:2cf09d66a86fdd210e42ee91662216364acc27da1163a8c44167a77ea3a6559a
     container_name: signal-api
     profiles: ["signal"]
     environment:

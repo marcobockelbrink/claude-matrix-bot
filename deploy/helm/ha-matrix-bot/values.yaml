@@ -54,7 +54,7 @@ signal:
   image:
     repository: bbernhard/signal-cli-rest-api
     # Rootless variant so the sidecar doesn't run as root.
-    tag: "0.100-rootless"
+    tag: "0.100-rootless@sha256:7f80cec95fc36408fae6bdc6b4534764d825d5bd02c5772db8740842bdd257f0"
   persistence:
     size: 1Gi
     storageClass: ""
