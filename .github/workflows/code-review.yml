@@ -46,7 +46,7 @@ jobs:
           uv run --frozen -p 3.14 --with coverage coverage xml -o coverage.xml
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8.4.0
+        uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
         with:
           # The branch plugin needs the head SHA on GitHub PRs, otherwise the comment does not reach the PR
           args: >
@@ -74,7 +74,7 @@ jobs:
           fetch-depth: 0 # so Claude can read callers, tests and history
 
       - name: Claude-Review
-        uses: anthropics/claude-code-action@d70510b174a1244958df0b03166a54912811f3e6 # v1.0.264
+        uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed # v1.0.271
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # No track_progress: it switches the action into tag mode, which requires this
