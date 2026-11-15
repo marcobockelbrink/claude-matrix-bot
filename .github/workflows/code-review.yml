@@ -99,12 +99,12 @@ jobs:
             | Projektmuster | Weicht die Änderung von den Konventionen des Repos ab (Benennung, Fehlerbehandlung, Aufbau)? |
             | Sicherheit | Injection, fehlende Auth-/Rechteprüfung, Geheimnisse, Path Traversal, SSRF |
             | Performance | N+1-Abfragen, fehlende Indizes, unbegrenzte Schleifen, Speicherlecks |
-            | Vollständigkeit | fehlende Tests, fehlende Fehlerbehandlung, halbe Migrationen |
+            | Vollständigkeit | fehlende Tests, fehlende Fehlerbehandlung, halbe Migrationen. Ändert der PR Code-Verhalten und belegt kein Test im PR das neue Verhalten, ist das ein Befund `hoch` (gilt nicht für reine Doku- oder Konfigurationsänderungen) |
             | Wartbarkeit | toter Code, magische Zahlen, tiefe Verschachtelung, unklare Benennung |
 
             **3. Schweregrade.** Jeder Befund bekommt genau einen:
             - `kritisch` – Sicherheitslücke oder Datenverlust. Vor dem Merge beheben.
-            - `hoch` – Bug oder Logikfehler, der im Betrieb auffallen wird. Sollte vor dem Merge weg.
+            - `hoch` – Bug oder Logikfehler, der im Betrieb auffallen wird, oder neues Verhalten ohne Test. Sollte vor dem Merge weg.
             - `mittel` – Qualitätsmangel, Behebung empfohlen.
             - `niedrig` – Kleinigkeit, optional.
 
@@ -121,15 +121,37 @@ jobs:
             - Bewusst dokumentierte Entscheidungen (Code-Kommentare, `CLAUDE.md`) sind keine Befunde.
             - Lieber drei echte Befunde als zehn vermutete.
 
-            **6. Ausgabe.**
+            **6. Gegenprüfung, bevor du etwas schreibst.**
+            Versuche jeden Befund zu widerlegen: Lies Aufrufer, Tests, vorgelagerte Prüfungen und
+            Doku, die ihn entkräften könnten. Inline bleibt nur, was danach mit einem konkreten
+            Fehlerszenario steht (welche Eingabe oder welcher Zustand führt zu welchem falschen
+            Ergebnis). Was du widerlegst, fällt weg. Was du weder bestätigen noch widerlegen
+            kannst, kommt nicht inline, sondern als Liste „unsicher“ in die Zusammenfassung.
+            Ausnahme fehlender Test: Hier genügt als Szenario, welches neue Verhalten ungeprüft
+            bleibt. Widerlegt ist er nur, wenn ein Test im PR dieses Verhalten tatsächlich prüft.
+            Den Kommentar an die geänderte Codezeile setzen, nicht an eine Testdatei.
+
+            **7. Ausgabe.**
             - Jeden Befund als Inline-Kommentar an der betroffenen Zeile, beginnend mit
-              **kritisch**, **hoch**, **mittel** oder **niedrig**, mit konkretem Vorschlag.
+              **kritisch**, **hoch**, **mittel** oder **niedrig**, mit Fehlerszenario und konkretem Vorschlag.
+            - Betrifft die Korrektur nur die kommentierten Zeilen und ist sie höchstens etwa
+              10 Zeilen lang, schreib sie als ```suggestion-Block, damit man sie mit einem Klick
+              übernehmen kann. Der Block ersetzt den ganzen kommentierten Zeilenbereich; bei
+              mehreren Zeilen den Kommentar über Start- und Endzeile setzen. Ein Vorschlag muss
+              für sich allein funktionieren: Braucht er weitere Änderungen an anderer Stelle (Import,
+              zu löschende Zeilen, neue Hilfsfunktion), schreib keinen suggestion-Block, sondern
+              beschreib die Korrektur. Prüfe vor dem Posten, dass der Code nach dem Ersetzen genau
+              dieses Zeilenbereichs korrekt wäre (keine doppelten oder fehlenden Zeilen).
             - **Immer** zum Schluss eine Zusammenfassung an den PR schreiben, auch bei null Befunden:
-              `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body "..."`
-              (aktualisiert bei jedem Push denselben Kommentar). Inhalt: ein Satz Gesamturteil und
-              die Zahl der Befunde je Schweregrad, bei nichts Gefundenem genau: Keine Befunde.
+              `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body '...'`
+              (aktualisiert bei jedem Push denselben Kommentar). Inhalt: ein Satz Gesamturteil,
+              die Zahl der Befunde je Schweregrad und, falls vorhanden, die Liste „unsicher“
+              mit Datei:Zeile und je einem Satz. Nur wenn es weder Befunde noch Unsicheres gibt,
+              genau: Keine Befunde. Den Text in einfachen Anführungszeichen übergeben (--body '...'),
+              damit Backticks und $ nicht von der Shell ausgewertet werden; im Text selbst keine
+              einfachen Anführungszeichen verwenden.
               Ein stummer Lauf ist ein fehlgeschlagener Lauf -- dieser Schritt darf nie entfallen.
           claude_args: |
-            --model claude-sonnet-5
+            --model claude-opus-5-5
             --setting-sources project
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Read,Grep,Glob,WebFetch,WebSearch"
