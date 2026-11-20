@@ -140,17 +140,19 @@ jobs:
           -m unittest discover -s tests -v
 
       - name: No fixable HIGH or CRITICAL vulnerability
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
-          TRIVY_PLATFORM: ${{ matrix.platform }}
+          PLATFORM: ${{ matrix.platform }}
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          image-ref: ${{ env.CANDIDATE }}
-          format: table
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
+        # Scan straight from the registry: exporting a foreign-platform image
+        # from the runner's docker daemon fails with "content digest … not found".
+        run: >
+          docker run --rm
+          -e TRIVY_USERNAME -e TRIVY_PASSWORD
+          aquasec/trivy:0.70.0 image
+          --image-src remote --platform "$PLATFORM"
+          --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+          --format table "$CANDIDATE"
 
   # Gives the checked digest its tags, then signs and attests it.
   publish:
