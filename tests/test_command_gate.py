@@ -104,9 +104,9 @@ class StartupCleanupTest(unittest.IsolatedAsyncioTestCase):
     async def test_startup_failure_closes_http_and_agent_session(self):
         with mock.patch("bot.load_state", return_value={}), mock.patch("bot.save_state"):
             b = bot.Bot(make_config())
-        b.claude = mock.Mock()
-        b.claude.disconnect = mock.AsyncMock()
-        b._connect_claude = mock.AsyncMock()
+        b.backend = mock.Mock()
+        b.backend.disconnect = mock.AsyncMock()
+        b._connect_backend = mock.AsyncMock()
         b._connect_matrix = mock.AsyncMock(side_effect=RuntimeError("matrix down"))
         http = mock.Mock()
         http.close = mock.AsyncMock()
@@ -114,7 +114,7 @@ class StartupCleanupTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError):
                 await b.run()
         http.close.assert_awaited_once()
-        b.claude.disconnect.assert_awaited_once()
+        b.backend.disconnect.assert_awaited_once()
 
 
 class SpawnFailureTest(unittest.IsolatedAsyncioTestCase):

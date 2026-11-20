@@ -47,8 +47,13 @@ do from a Claude Code session, reachable wherever your phone has signal.
   answers with an API error instead of doing the work is replaced and the request retried; a
   daily restart keeps the session fresh. After a start the bot says "back online" in the chat
   with its version.
-- **Status page** — `/status` shows version, connections, agent state, recent runs and the
-  latest log lines, as HTML or JSON.
+- **Status page** — `/status` shows version, connections, agent backend, agent state, recent
+  runs and the latest log lines, as HTML or JSON.
+- **Claude or Mistral** — `AGENT_BACKEND=claude|mistral` picks the agent backend (Claude Agent
+  SDK vs. the bot's own tool-calling loop against the Mistral API; the destructive-command gate
+  applies to both). The active backend can also be switched at runtime on the token-protected
+  webhook port: `POST /config {"backend": "mistral", "model": "devstral-small-latest"}`
+  (`X-Token` header or `?token=`), persisted in `data/state.json` across restarts.
 
 ## How it works
 
@@ -212,7 +217,8 @@ The same port serves `http://<bot-host-ip>:8321/status` (same token, as `X-Token
 `agent_failure`), next briefing and restart, the last 20 runs and the latest log lines. With
 `?format=json` or without an HTML `Accept` header it returns JSON, which a Home Assistant
 REST sensor can watch. `/healthz` needs no token and only says whether the Matrix sync loop
-is alive.
+is alive. `POST /config` (same token) switches the agent backend at runtime — see
+**Claude or Mistral** above.
 
 ## Where to run it
 

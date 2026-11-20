@@ -63,6 +63,30 @@ class LoadConfigTest(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True):
             self.assertEqual(bot.load_config().claude_auth, {"ANTHROPIC_API_KEY": "key"})
 
+    def test_mistral_backend_needs_no_claude_credentials_but_a_mistral_key(self):
+        env = {k: v for k, v in MINIMAL_ENV.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+        env["AGENT_BACKEND"] = "mistral"
+        env["MISTRAL_API_KEY"] = "mk"
+        with mock.patch.dict(os.environ, env, clear=True):
+            cfg = bot.load_config()
+        self.assertEqual(cfg.backend, "mistral")
+        self.assertEqual(cfg.claude_auth, {})
+        self.assertEqual(cfg.mistral_api_key, "mk")
+        self.assertEqual(cfg.mistral_model, "mistral-medium-latest")
+        with mock.patch.dict(os.environ, {**env, "MISTRAL_MODEL": "devstral-small-latest"}, clear=True):
+            self.assertEqual(bot.load_config().mistral_model, "devstral-small-latest")
+
+    def test_mistral_backend_without_key_stops_the_start(self):
+        env = {k: v for k, v in MINIMAL_ENV.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+        env["AGENT_BACKEND"] = "mistral"
+        with mock.patch.dict(os.environ, env, clear=True), self.assertRaises(SystemExit):
+            bot.load_config()
+
+    def test_unknown_backend_stops_the_start(self):
+        with mock.patch.dict(os.environ, {**MINIMAL_ENV, "AGENT_BACKEND": "gemini"}, clear=True), self.assertRaises(SystemExit):
+            bot.load_config()
+        self.assertEqual(load(AGENT_BACKEND="claude").backend, "claude")
+
     def test_single_allowed_user_from_the_v1_variable(self):
         env = {k: v for k, v in MINIMAL_ENV.items() if k != "MATRIX_ALLOWED_USERS"}
         env["MATRIX_ALLOWED_USER"] = "@old:example"

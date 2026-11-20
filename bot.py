@@ -119,6 +119,7 @@ STATUS_PAGE = """<!doctype html>
 <table>
 <tr><td class="muted">Version</td><td>{version}</td></tr>
 <tr><td class="muted">Uptime</td><td>{uptime}</td></tr>
+<tr><td class="muted">Agent backend</td><td>{backend}</td></tr>
 <tr><td class="muted">Agent</td><td>{agent}</td></tr>
 <tr><td class="muted">Matrix</td><td>{matrix}</td></tr>
 <tr><td class="muted">Signal</td><td>{signal}</td></tr>
@@ -423,7 +424,10 @@ class SignalConfig:
 class Config:
     # Secrets stay out of repr(), so a logged or printed Config cannot leak them
     # (the log is shown on /status).
+    backend: str
     claude_auth: dict = field(repr=False)
+    mistral_api_key: str = field(repr=False)
+    mistral_model: str
     ha_base_url: str
     ha_token: str = field(repr=False)
     homeserver: str
@@ -450,21 +454,16 @@ class Config:
 
 
 def claude_credentials() -> dict[str, str]:
+    """Claude auth from the environment; {} if none. Startup enforces presence
+    per selected backend; the runtime backend switch re-checks."""
     # Either a Claude subscription OAuth token (`claude setup-token`) or a
     # pay-per-use API key from console.anthropic.com works; the Agent SDK
     # picks up whichever env var is set.
-    auth = {
+    return {
         name: value
         for name in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
         if (value := os.environ.get(name))
     }
-    if not auth:
-        log.error(
-            "Missing Claude credentials: set CLAUDE_CODE_OAUTH_TOKEN "
-            "(from `claude setup-token`) or ANTHROPIC_API_KEY in .env"
-        )
-        sys.exit(1)
-    return auth
 
 
 def matrix_allowed_users() -> frozenset[str]:
@@ -509,8 +508,26 @@ def signal_config() -> SignalConfig:
 
 def load_config() -> Config:
     """Read and validate the environment; exits with a message if it is unusable."""
+    backend = (os.environ.get("AGENT_BACKEND") or "claude").lower()
+    if backend not in BACKENDS:
+        log.error("AGENT_BACKEND must be one of %s (got %r)", ", ".join(BACKENDS), backend)
+        sys.exit(1)
+    mistral_api_key = os.environ.get("MISTRAL_API_KEY") or ""
+    claude_auth = claude_credentials()
+    if backend == "claude" and not claude_auth:
+        log.error(
+            "Missing Claude credentials: set CLAUDE_CODE_OAUTH_TOKEN "
+            "(from `claude setup-token`) or ANTHROPIC_API_KEY in .env"
+        )
+        sys.exit(1)
+    if backend == "mistral" and not mistral_api_key:
+        log.error("AGENT_BACKEND=mistral requires MISTRAL_API_KEY in .env")
+        sys.exit(1)
     return Config(
-        claude_auth=claude_credentials(),
+        backend=backend,
+        claude_auth=claude_auth,
+        mistral_api_key=mistral_api_key,
+        mistral_model=os.environ.get("MISTRAL_MODEL") or "mistral-medium-latest",
         ha_base_url=require_env("HA_BASE_URL").rstrip("/"),
         ha_token=require_env("HA_TOKEN"),
         homeserver=require_env("MATRIX_HOMESERVER"),
@@ -589,6 +606,15 @@ def render_runs(run_history) -> str:
     return rows or '<tr><td colspan="5" class="muted">none yet</td></tr>'
 
 
+def backend_caption(p: dict) -> str:
+    if p["backend"] == "mistral":
+        return f"Mistral ({html.escape(p['agent_model'] or '?')}) — switch: POST /config"
+    caption = "Claude (Agent SDK)"
+    if not p["claude_auth_available"]:
+        caption += " — switching unavailable: no CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY"
+    return caption + " — switch: POST /config"
+
+
 def render_status_page(p: dict, run_history) -> str:
     """The HTML status page for a status_payload() dict."""
     agent = status_badge(p["agent_ok"], "ok", "failing")
@@ -597,6 +623,7 @@ def render_status_page(p: dict, run_history) -> str:
     matrix_up = p["matrix_connected"]
     return STATUS_PAGE.format(
         version=html.escape(BOT_VERSION),
+        backend=backend_caption(p),
         cls="ok" if matrix_up else "bad",
         state="online" if matrix_up else "degraded",
         uptime=format_uptime(p["uptime_s"]),
@@ -703,7 +730,459 @@ class TurnState:
             log.warning("Agent turn ended: %s", message.subtype)
 
 
+# ── Agent backends ───────────────────────────────────────────────────────────
+#
+# The chat logic (Bot) is backend-agnostic: a backend takes one prompt and
+# yields SDK-shaped messages (AssistantMessage / ResultMessage), so TurnState
+# and judge_turn work for every backend. Which backend runs is chosen via
+# AGENT_BACKEND at config time, or at runtime through POST /config on the
+# token-protected webhook app (persisted in state.json).
+
+BACKENDS = ("claude", "mistral")
+
+# Turn limits shared by the backends.
+COMMAND_TIMEOUT_S = 120
+TOOL_OUTPUT_CHARS = 20000
+FILE_TOOL_CHARS = 200000
+
+
+class ClaudeBackend:
+    """The Claude Agent SDK client. `client` overrides the SDK session for tests."""
+
+    def __init__(self, options: ClaudeAgentOptions | None = None, client=None) -> None:
+        self.options = options
+        self.client = client if client is not None else ClaudeSDKClient(options=options)
+
+    async def connect(self) -> None:
+        await self.client.connect()
+
+    async def disconnect(self) -> None:
+        await self.client.disconnect()
+
+    async def query_stream(self, prompt: str):
+        await self.client.query(prompt)
+        async for message in self.client.receive_response():
+            yield message
+
+    async def interrupt(self) -> None:
+        await self.client.interrupt()
+
+    async def receive_response(self):
+        async for message in self.client.receive_response():
+            yield message
+
+
+# Mistral backend: the agent loop is the bot's own, over the chat-completions
+# tool-calling API. Tools mirror what the Claude harness offers, so
+# system_prompt.md works for both. Everything the model may touch is jailed to
+# DATA_DIR (its cwd, holds memory.md) and the outbox.
+MISTRAL_TOOL_SPECS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "Bash",
+            "description": (
+                "Run a shell command in the bot's data directory. curl to "
+                "$HA_BASE_URL with $HA_TOKEN works. Destructive commands may ask "
+                "the owner for confirmation in chat; a denial is final."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string", "description": "bash command"}},
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "Read",
+            "description": "Read a UTF-8 text file; relative paths resolve inside the data directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "Write",
+            "description": (
+                "Write a UTF-8 text file (full content). Use $OUTBOX for files "
+                "that should be delivered into the chat after the turn."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "Edit",
+            "description": "Replace the first occurrence of old_string with new_string in a text file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "old_string": {"type": "string"},
+                    "new_string": {"type": "string"},
+                },
+                "required": ["path", "old_string", "new_string"],
+            },
+        },
+    },
+]
+
+# Map an HTTP status to the SDK error vocabulary judge_turn understands. All of
+# these are ERRORS_A_NEW_SESSION_CANNOT_FIX — a fresh history cures none of them.
+MISTRAL_HTTP_ERROR = {401: "authentication_failed", 402: "billing_error", 403: "authentication_failed", 429: "rate_limit"}
+
+
+class MistralAPIError(Exception):
+    def __init__(self, code: str, status: int) -> None:
+        super().__init__(f"Mistral API {status}: {code}")
+        self.code = code
+        self.status = status
+        self.retryable = status in (0, 429, 500, 502, 503, 504)  # 0 = network error
+
+
+class MistralBackend:
+    """Agent turns via Mistral's /v1/chat/completions with function calling.
+
+    The conversation is kept in memory for the life of the backend (same
+    persistence model as the Claude session: restarts lose the chat, memory.md
+    keeps the long-term state). `connect()` clears the history — that is the
+    "fresh session". The http session of the Bot is reused unless one is
+    injected; only a self-created one is closed on disconnect.
+    """
+
+    API_URL = "https://api.mistral.ai/v1/chat/completions"
+    MAX_TOOL_ROUNDS = 50
+    MAX_HISTORY_MESSAGES = 160
+    REQUEST_TIMEOUT_S = 180
+    RETRIES = 3
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        gate,
+        system_prompt: str,
+        base_env: dict,
+        cwd: Path,
+        outbox: Path,
+        http: "aiohttp.ClientSession | None" = None,
+    ) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.gate = gate  # async (tool_name, tool_input, context) → Allow/Deny
+        self.system_prompt = system_prompt
+        self.base_env = base_env
+        self.cwd = Path(cwd)
+        self.outbox = Path(outbox)
+        self._http = http
+        self._owns_http = False
+        self.history: list[dict] = []
+        self._aborted = False
+        self._abort_event: asyncio.Event | None = None
+        self._request: asyncio.Task | None = None
+
+    async def connect(self) -> None:
+        if self._http is None:
+            self._http = aiohttp.ClientSession()
+            self._owns_http = True
+        # A fresh session loses the conversation — same contract as Claude's.
+        self.history = []
+        self._aborted = False
+        self._abort_event = asyncio.Event()
+        log.info("Mistral agent backend connected (model=%s).", self.model)
+
+    async def disconnect(self) -> None:
+        self._request = None
+        if self._owns_http and self._http is not None:
+            await self._http.close()
+        self._http = None
+
+    async def interrupt(self) -> None:
+        self._aborted = True
+        if self._abort_event is not None:
+            self._abort_event.set()
+        if self._request is not None and not self._request.done():
+            self._request.cancel()
+
+    async def receive_response(self):
+        # Turn cancellation happens inside query_stream; nothing to drain.
+        return
+        yield  # pragma: no cover
+
+    # ── tool execution ────────────────────────────────────────────────────────
+    def _resolve(self, path: str) -> Path | None:
+        """p inside DATA_DIR or the outbox, else None (jail)."""
+        p = Path(path)
+        if not p.is_absolute():
+            p = self.cwd / p
+        resolved = p.resolve()
+        roots = [self.cwd.resolve(), self.outbox.resolve()]
+        for root in roots:
+            if resolved == root or root in resolved.parents:
+                return resolved
+        return None
+
+    def _read(self, path: str) -> str:
+        resolved = self._resolve(path)
+        if resolved is None:
+            return f"error: {path} is outside the data directory"
+        try:
+            text = resolved.read_text()
+        except (OSError, UnicodeDecodeError) as exc:
+            return f"error: {exc}"
+        return text[:FILE_TOOL_CHARS] + ("\n…(truncated)" if len(text) > FILE_TOOL_CHARS else "")
+
+    def _write(self, path: str, content: str) -> str:
+        resolved = self._resolve(path)
+        if resolved is None:
+            return f"error: {path} is outside the data directory"
+        if len(content) > FILE_TOOL_CHARS:
+            return "error: content too large"
+        try:
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_text(content)
+        except OSError as exc:
+            return f"error: {exc}"
+        return f"wrote {len(content)} chars to {path}"
+
+    def _edit(self, path: str, old_string: str, new_string: str) -> str:
+        resolved = self._resolve(path)
+        if resolved is None:
+            return f"error: {path} is outside the data directory"
+        try:
+            text = resolved.read_text()
+        except (OSError, UnicodeDecodeError) as exc:
+            return f"error: {exc}"
+        if old_string not in text:
+            return "error: old_string not found"
+        resolved.write_text(text.replace(old_string, new_string, 1))
+        return f"edited {path}"
+
+    async def _bash(self, command: str) -> str:
+        # The same gate as the Claude backend: destructive commands need the
+        # owner's yes/no in chat before they run.
+        verdict = await self.gate("Bash", {"command": command}, None)
+        if not isinstance(verdict, PermissionResultAllow):
+            return f"error: command not allowed ({getattr(verdict, 'message', 'denied')})"
+        # Never hand Claude credentials to a shell whose output goes to Mistral.
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+        }
+        env.update(self.base_env)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "bash", "-c", command,
+                cwd=self.cwd, env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except OSError as exc:
+            return f"error: {exc}"
+        # Race the command against the abort event: interrupt() must stop a
+        # running child, not just the HTTP request.
+        wait_task = asyncio.ensure_future(proc.communicate())
+        abort_task = asyncio.ensure_future(self._abort_event.wait())
+        try:
+            done, _pending = await asyncio.wait(
+                {wait_task, abort_task},
+                timeout=COMMAND_TIMEOUT_S,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            wait_task.cancel()
+            abort_task.cancel()
+            proc.kill()
+            raise
+        if abort_task in done or self._aborted:
+            wait_task.cancel()
+            proc.kill()
+            raise asyncio.CancelledError
+        if not done:  # timed out
+            wait_task.cancel()
+            proc.kill()
+            return f"error: command timed out after {COMMAND_TIMEOUT_S}s"
+        out, _ = wait_task.result()
+        abort_task.cancel()
+        text = out.decode(errors="replace")
+        head = text[:TOOL_OUTPUT_CHARS]
+        return head + (f"\n…(output truncated, {len(text)} chars total)" if len(text) > TOOL_OUTPUT_CHARS else "")
+
+    async def _execute(self, name: str, args: dict) -> str:
+        try:
+            if name == "Bash":
+                return await self._bash(args.get("command", ""))
+            if name == "Read":
+                return self._read(args.get("path", ""))
+            if name == "Write":
+                return self._write(args.get("path", ""), args.get("content", ""))
+            if name == "Edit":
+                return self._edit(args.get("path", ""), args.get("old_string", ""), args.get("new_string", ""))
+            return f"error: unknown tool {name}"
+        except Exception as exc:  # a tool must never kill the turn
+            log.exception("Mistral tool %s failed", name)
+            return f"error: {exc}"
+
+    # ── the chat loop ─────────────────────────────────────────────────────────
+    async def _post_chat(self, messages: list[dict]) -> dict:
+        try:
+            async with self._http.post(
+                self.API_URL,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "system", "content": self.system_prompt}] + messages,
+                    "tools": MISTRAL_TOOL_SPECS,
+                    "tool_choice": "auto",
+                },
+                timeout=aiohttp.ClientTimeout(total=self.REQUEST_TIMEOUT_S),
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                if resp.status not in (429, 500, 502, 503, 504):
+                    body = await resp.text()
+                    log.warning("Mistral API %d: %s", resp.status, loggable(body, 200))
+                raise MistralAPIError(
+                    MISTRAL_HTTP_ERROR.get(resp.status, "server_error" if resp.status >= 500 else "invalid_request"),
+                    resp.status,
+                )
+        except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+            # Network-level failure: retryable like a 5xx, but never confused
+            # with the turn timeout (which is asyncio.TimeoutError at the Bot
+            # level — this one is raised and converted here first).
+            raise MistralAPIError("server_error", 0) from exc
+
+    async def _chat(self) -> dict:
+        # One in-flight request per turn so interrupt() can cancel it; retried
+        # with backoff on rate limits and server errors, fatal otherwise.
+        error: MistralAPIError | None = None
+        for attempt in range(self.RETRIES):
+            if self._aborted:
+                raise asyncio.CancelledError
+            request = asyncio.create_task(self._post_chat(self.history))
+            self._request = request
+            try:
+                return await request
+            except MistralAPIError as exc:
+                error = exc
+                if not exc.retryable:
+                    raise
+                if attempt < self.RETRIES - 1:
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
+                raise
+            finally:
+                if self._request is request:
+                    self._request = None
+        raise error or MistralAPIError("server_error", 500)
+
+    def _trim_history(self) -> None:
+        # Drop the oldest messages; memory.md is the durable memory, the tail
+        # is what keeps the conversation coherent. Never cut between an
+        # assistant tool_calls message and its tool responses: a dangling
+        # tool message (or an unanswered call) makes the API reject the next
+        # turn with 400.
+        excess = len(self.history) - self.MAX_HISTORY_MESSAGES
+        if excess <= 0:
+            return
+        cut = excess
+        while cut < len(self.history) and self.history[cut].get("role") == "tool":
+            cut += 1
+        self.history = self.history[cut:]
+        log.info("Trimmed %d old messages from the Mistral session history", cut)
+
+    @staticmethod
+    def _result(subtype: str, is_error: bool = False) -> ResultMessage:
+        return ResultMessage(
+            subtype=subtype,
+            duration_ms=0,
+            duration_api_ms=0,
+            is_error=is_error,
+            num_turns=1,
+            session_id="mistral",
+            api_error_status=None,
+        )
+
+    async def query_stream(self, prompt: str):
+        """Run one agent turn; yields SDK-shaped messages for TurnState."""
+        if self._http is None:
+            raise RuntimeError("Mistral backend is not connected")
+        self._aborted = False
+        self.history.append({"role": "user", "content": prompt})
+        # Position of the last unanswered assistant tool_calls message; on
+        # abort/error the history is rolled back to it, because the API rejects
+        # a turn whose tool_calls never got tool responses.
+        answered_mark = len(self.history)
+        try:
+            for _ in range(self.MAX_TOOL_ROUNDS):
+                data = await self._chat()
+                choice = (data.get("choices") or [{}])[0]
+                message = choice.get("message") or {}
+                tool_calls = message.get("tool_calls") or []
+                content = message.get("content") or ""
+                if not tool_calls:
+                    self.history.append({"role": "assistant", "content": content})
+                    self._trim_history()
+                    if content:
+                        yield AssistantMessage(
+                            content=[TextBlock(text=content)], model=self.model, error=None
+                        )
+                    yield self._result("success")
+                    return
+                self.history.append(
+                    {"role": "assistant", "content": content or "", "tool_calls": tool_calls}
+                )
+                blocks = []
+                for call in tool_calls:
+                    fn = call.get("function") or {}
+                    try:
+                        args = json.loads(fn.get("arguments") or "{}")
+                        if not isinstance(args, dict):
+                            args = {}
+                    except ValueError:
+                        args = {}
+                    blocks.append(ToolUseBlock(id=call.get("id", "t"), name=fn.get("name", ""), input=args))
+                yield AssistantMessage(content=blocks, model=self.model, error=None)
+                for call, block in zip(tool_calls, blocks):
+                    if self._aborted:
+                        raise asyncio.CancelledError
+                    output = await self._execute(block.name, block.input)
+                    self.history.append(
+                        {
+                            "role": "tool",
+                            "name": block.name,
+                            "content": output,
+                            "tool_call_id": call.get("id", "t"),
+                        }
+                    )
+                answered_mark = len(self.history)
+            # The model kept calling tools without ever answering.
+            yield self._result("error_max_turns")
+        except asyncio.CancelledError:
+            del self.history[answered_mark:]
+            raise
+        except MistralAPIError as exc:
+            del self.history[answered_mark:]
+            log.error("Mistral turn failed: %s", exc)
+            yield AssistantMessage(content=[], model=self.model, error=exc.code)
+            yield self._result("error_during_execution", is_error=True)
+
+
 # ── The bot ──────────────────────────────────────────────────────────────────
+
 
 
 class Bot:
@@ -714,7 +1193,9 @@ class Bot:
         self.S = STRINGS[cfg.lang]
         self.started_at = time.time()
         self.http: aiohttp.ClientSession | None = None
-        self.claude: ClaudeSDKClient | None = None
+        self.backend = None  # ClaudeBackend | MistralBackend, set in _connect_backend
+        self.backend_name = cfg.backend
+        self.backend_model = cfg.mistral_model if cfg.backend == "mistral" else None
         self.matrix: AsyncClient | None = None
         # Ignore any history the server replays on the first sync.
         self.start_ms = 0
@@ -743,6 +1224,12 @@ class Bot:
         self.restart_next: str | None = None
 
         self.state = load_state()
+        # A runtime switch (POST /config) persists its choice and wins over the
+        # env default; unknown values fall back to the configuration.
+        if self.state.get("agent_backend") in BACKENDS:
+            self.backend_name = self.state["agent_backend"]
+        if isinstance(self.state.get("mistral_model"), str) and self.state["mistral_model"]:
+            self.backend_model = self.state["mistral_model"]
         self.online_notice_due = should_announce_start(
             self.state, time.time(), cfg.announce_planned_restart
         )
@@ -769,12 +1256,12 @@ class Bot:
     async def run(self) -> None:
         self.http = aiohttp.ClientSession()
         try:
-            await self._connect_claude()
+            await self._connect_backend()
             await self._connect_matrix()
         except BaseException:
-            if self.claude:
+            if self.backend:
                 try:
-                    await self.claude.disconnect()
+                    await self.backend.disconnect()
                 except Exception:
                     log.exception("Could not disconnect the agent session")
             await self.http.close()
@@ -812,7 +1299,7 @@ class Bot:
             if webhook:
                 await webhook.cleanup()
             await self.http.close()
-            await self.claude.disconnect()
+            await self.backend.disconnect()
             await self.matrix.close()
         if self.fatal.is_set():
             sys.exit(1)
@@ -843,22 +1330,83 @@ class Bot:
                 "HA_BASE_URL": cfg.ha_base_url,
                 "HA_TOKEN": cfg.ha_token,
                 "OUTBOX": str(OUTBOX_DIR),
-                **cfg.claude_auth,
+                # Fresh env read on (re)connect: a runtime switch to claude also
+                # works when AGENT_BACKEND=mistral without claude auth in Config.
+                **(cfg.claude_auth or claude_credentials()),
             },
             model=cfg.model,
             **gate,
         )
 
-    async def _connect_claude(self) -> None:
-        # One persistent session for the life of the process.
-        self.claude = ClaudeSDKClient(options=self._agent_options())
-        await self.claude.connect()
+    async def _connect_backend(self) -> None:
+        """Build and connect the agent session chosen for this start."""
+        name, model = self._selected_backend()
+        await self._adopt_backend(self._make_backend(name, model), name, model)
         log.info(
-            "Claude Agent SDK session connected (version=%s, confirm_destructive=%s, signal=%s).",
+            "Agent backend connected: %s (model=%s, version=%s, confirm_destructive=%s, signal=%s).",
+            name, model,
             BOT_VERSION,
             self.cfg.confirm_destructive,
             self.cfg.signal.enabled,
         )
+
+    def _selected_backend(self) -> tuple[str, str | None]:
+        model = self.backend_model if self.backend_name == "mistral" else None
+        return self.backend_name, model
+
+    def _make_backend(self, name: str, model: str | None = None):
+        if name == "claude":
+            if not self.cfg.claude_auth and not claude_credentials():
+                raise ValueError("no Claude credentials configured (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY)")
+            return ClaudeBackend(options=self._agent_options())
+        if name == "mistral":
+            if not self.cfg.mistral_api_key:
+                raise ValueError("MISTRAL_API_KEY is not configured")
+            return MistralBackend(
+                api_key=self.cfg.mistral_api_key,
+                model=model or self.cfg.mistral_model,
+                gate=self.can_use_tool,
+                system_prompt=Path(__file__).with_name("system_prompt.md").read_text(),
+                base_env={
+                    "HA_BASE_URL": self.cfg.ha_base_url,
+                    "HA_TOKEN": self.cfg.ha_token,
+                    "OUTBOX": str(OUTBOX_DIR),
+                },
+                cwd=DATA_DIR,
+                outbox=OUTBOX_DIR,
+                http=self.http,
+            )
+        raise ValueError(f"unknown agent backend {name!r}")
+
+    async def _adopt_backend(self, backend, name: str, model: str | None) -> None:
+        await backend.connect()
+        self.backend, self.backend_name = backend, name
+        self.backend_model = (model or getattr(backend, "model", None)) if name == "mistral" else None
+
+    async def switch_backend(self, name: str | None, model: str | None = None) -> None:
+        """Swap the agent session at runtime (POST /config). Serialized behind
+        the agent lock, so no run is half through a turn when it happens."""
+        if name not in BACKENDS:
+            raise ValueError("backend must be 'claude' or 'mistral'")
+        if name == "claude" and not self.cfg.claude_auth and not claude_credentials():
+            raise ValueError("no Claude credentials configured (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY)")
+        if name == "mistral" and not self.cfg.mistral_api_key:
+            raise ValueError("MISTRAL_API_KEY is not configured")
+        resolved_model = model if name == "mistral" else None
+        async with self.agent_lock:
+            old = self.backend
+            new = self._make_backend(name, resolved_model)
+            await self._adopt_backend(new, name, resolved_model)
+            if old is not None and old is not new:
+                try:
+                    await old.disconnect()
+                except Exception:
+                    log.exception("Could not disconnect the previous agent backend")
+            self.state["agent_backend"] = name
+            if name == "mistral":
+                self.state["mistral_model"] = self.backend_model or self.cfg.mistral_model
+            save_state(self.state)
+        log.info("Agent backend switched: %s (model=%s)", self.backend_name, self.backend_model)
 
     async def _start_webhook(self) -> "Webhook | None":
         if not self.cfg.webhook_port:
@@ -1032,7 +1580,7 @@ class Bot:
         )
         if not isinstance(login, LoginResponse):
             log.error("Matrix login failed: %s", login)
-            await self.claude.disconnect()
+            await self.backend.disconnect()
             sys.exit(1)
         save_session(self.matrix)
         log.info(
@@ -1179,8 +1727,8 @@ class Bot:
     async def reconnect_session(self) -> bool:
         """Replace the agent session with a fresh one; the conversation is lost."""
         try:
-            await self.claude.disconnect()
-            await self.claude.connect()
+            await self.backend.disconnect()
+            await self.backend.connect()
         except Exception:
             log.exception("Reconnecting the agent session failed")
             return False
@@ -1188,8 +1736,8 @@ class Bot:
         return True
 
     async def _drain_turn(self) -> None:
-        await self.claude.interrupt()
-        async for _ in self.claude.receive_response():
+        await self.backend.interrupt()
+        async for _ in self.backend.receive_response():
             # Discard: we only need to reach the end of the turn.
             pass
 
@@ -1214,8 +1762,7 @@ class Bot:
     async def _attempt(self, prompt: str, turn: TurnState) -> tuple[str, bool] | None:
         """Run the prompt once; returns judge_turn's verdict."""
         turn.reset()
-        await self.claude.query(prompt)
-        async for message in self.claude.receive_response():
+        async for message in self.backend.query_stream(prompt):
             turn.absorb(message)
         return judge_turn(turn.result, turn.api_errors)
 
@@ -1589,6 +2136,7 @@ class Webhook:
     def build_app(self) -> web.Application:
         app = web.Application()
         app.router.add_post("/notify", self.handle_notify)
+        app.router.add_post("/config", self.handle_config)
         app.router.add_get("/status", self.handle_status)
         app.router.add_get("/healthz", self.handle_health)
         return app
@@ -1702,6 +2250,39 @@ class Webhook:
                 await self.bot.deliver(target, self.bot.S["notify_prefix"] + message)
         return web.json_response({"ok": True, "smart": smart})
 
+    # ── POST /config: switch the agent backend at runtime (token-protected) ────
+    async def handle_config(self, request: web.Request) -> web.Response:
+        if not self.token_ok(request):
+            return self.reject_bad_token(request)
+        try:
+            payload = await request.json()
+        except ValueError:
+            raise web.HTTPBadRequest(text="invalid JSON") from None
+        if not isinstance(payload, dict):
+            raise web.HTTPBadRequest(text="expected a JSON object")
+        name = payload.get("backend")
+        model = payload.get("model")
+        if not isinstance(name, str) or name not in BACKENDS:
+            raise web.HTTPBadRequest(text=f"'backend' must be one of: {', '.join(BACKENDS)}")
+        if model is not None and (not isinstance(model, str) or not model.strip()):
+            raise web.HTTPBadRequest(text="'model' must be a non-empty string when given")
+        model = model.strip() if isinstance(model, str) else None
+        try:
+            # Blocks behind the agent lock until the current run (if any) is done.
+            await self.bot.switch_backend(name, model)
+        except ValueError as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from None
+        except Exception:
+            log.exception("Backend switch failed")
+            raise web.HTTPBadGateway(text="could not connect the new backend — old one still active") from None
+        return web.json_response(
+            {
+                "ok": True,
+                "backend": self.bot.backend_name,
+                "model": self.bot.backend_model,
+            }
+        )
+
     # ── GET /status, /healthz ─────────────────────────────────────────────────
     def status_payload(self) -> dict:
         bot, cfg = self.bot, self.bot.cfg
@@ -1709,6 +2290,9 @@ class Webhook:
         return {
             "ok": True,
             "version": BOT_VERSION,
+            "backend": bot.backend_name,
+            "agent_model": bot.backend_model,
+            "claude_auth_available": bool(cfg.claude_auth or claude_credentials()),
             "uptime_s": int(now - bot.started_at),
             "agent_ok": bot.agent_state["ok"],
             "agent_failure": bot.agent_state["failure"],
@@ -1748,7 +2332,7 @@ class Webhook:
 async def main() -> None:
     cfg = load_config()
     # Everything is read; the agent session started below must not see these.
-    hide_secrets_from_agent("MATRIX_PASSWORD", "WEBHOOK_TOKEN")
+    hide_secrets_from_agent("MATRIX_PASSWORD", "WEBHOOK_TOKEN", "MISTRAL_API_KEY")
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     OUTBOX_DIR.mkdir(parents=True, exist_ok=True)

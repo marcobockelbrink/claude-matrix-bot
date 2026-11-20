@@ -51,8 +51,13 @@ einer Claude-Code-Session, erreichbar überall dort, wo dein Handy Empfang hat.
   Agent-Sitzung, die mit einem API-Fehler antwortet statt zu arbeiten, wird ersetzt und die
   Anfrage wiederholt; ein täglicher Neustart hält die Sitzung frisch. Nach einem Start meldet
   sich der Bot im Chat mit „wieder online" und seiner Version.
-- **Statusseite** — `/status` zeigt Version, Verbindungen, Agent-Zustand, die letzten Läufe
-  und die neuesten Logzeilen, als HTML oder JSON.
+- **Statusseite** — `/status` zeigt Version, Verbindungen, Agent-Backend, Agent-Zustand, die
+  letzten Läufe und die neuesten Logzeilen, als HTML oder JSON.
+- **Claude oder Mistral** — `AGENT_BACKEND=claude|mistral` wählt das Agent-Backend (Claude Agent
+  SDK vs. eigene Tool-Calling-Schleife gegen die Mistral-API; das Destructive-Command-Gate
+  greift bei beiden). Zur Laufzeit umschaltbar über den token-geschützten Webhook-Port:
+  `POST /config {"backend": "mistral", "model": "devstral-small-latest"}`
+  (Header `X-Token` oder `?token=`), wird in `data/state.json` persistiert.
 
 ## Funktionsweise
 
