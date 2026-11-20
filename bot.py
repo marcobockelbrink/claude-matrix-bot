@@ -772,6 +772,11 @@ class Bot:
             await self._connect_claude()
             await self._connect_matrix()
         except BaseException:
+            if self.claude:
+                try:
+                    await self.claude.disconnect()
+                except Exception:
+                    log.exception("Could not disconnect the agent session")
             await self.http.close()
             raise
         self._register_matrix_handlers()

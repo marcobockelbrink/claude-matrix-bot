@@ -77,7 +77,8 @@ class SignalApiGuardTest(unittest.TestCase):
 
 
 class TokenComparisonTest(unittest.TestCase):
-    async def test_non_ascii_token_is_a_plain_401_not_a_500(self):
+    # Sync: an async test on plain unittest.TestCase silently never runs.
+    def test_non_ascii_token_is_a_plain_401_not_a_500(self):
         with mock.patch("bot.load_state", return_value={}), mock.patch("bot.save_state"):
             b = bot.Bot(make_config())
         hook = bot.Webhook(b)
@@ -85,6 +86,35 @@ class TokenComparisonTest(unittest.TestCase):
         request.headers = {"X-Token": "ä"}
         request.query = {}
         self.assertFalse(hook.token_ok(request))
+
+
+class RunsTotalTest(unittest.TestCase):
+    def test_runs_total_counts_beyond_history_size(self):
+        with mock.patch("bot.load_state", return_value={}), mock.patch("bot.save_state"):
+            b = bot.Bot(make_config())
+        for _ in range(25):
+            b._record_run([("matrix", "!r:example")], "p", True, 0.0)
+        self.assertEqual(b.runs_total, 25)
+        self.assertEqual(len(b.run_history), 20)  # history stays capped
+        payload = bot.Webhook(b).status_payload()
+        self.assertEqual(payload["runs_total"], 25)
+
+
+class StartupCleanupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_startup_failure_closes_http_and_agent_session(self):
+        with mock.patch("bot.load_state", return_value={}), mock.patch("bot.save_state"):
+            b = bot.Bot(make_config())
+        b.claude = mock.Mock()
+        b.claude.disconnect = mock.AsyncMock()
+        b._connect_claude = mock.AsyncMock()
+        b._connect_matrix = mock.AsyncMock(side_effect=RuntimeError("matrix down"))
+        http = mock.Mock()
+        http.close = mock.AsyncMock()
+        with mock.patch("bot.aiohttp.ClientSession", return_value=http):
+            with self.assertRaises(RuntimeError):
+                await b.run()
+        http.close.assert_awaited_once()
+        b.claude.disconnect.assert_awaited_once()
 
 
 class SpawnFailureTest(unittest.IsolatedAsyncioTestCase):
