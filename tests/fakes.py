@@ -12,7 +12,10 @@ import bot
 
 def make_config(**overrides) -> bot.Config:
     fields = {
+        "backend": "claude",
         "claude_auth": {},
+        "mistral_api_key": "m-key",
+        "mistral_model": "mistral-medium-latest",
         "ha_base_url": "http://ha.local:8123",
         "ha_token": "ha-token",
         "homeserver": "https://matrix.example",
@@ -105,7 +108,7 @@ def make_bot(claude=None, **config_overrides) -> bot.Bot:
     """A Bot with no network: delivery and the outbox are mocks."""
     with mock.patch("bot.load_state", return_value={}), mock.patch("bot.save_state"):
         b = bot.Bot(make_config(**config_overrides))
-    b.claude = claude
+    b.backend = bot.ClaudeBackend(client=claude) if claude is not None else None
     b.deliver = mock.AsyncMock()
     b.flush_outbox = mock.AsyncMock()
     b.matrix = SimpleNamespace(rooms={})

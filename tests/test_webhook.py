@@ -167,5 +167,49 @@ class BadTokenLogTest(WebhookTestCase):
         self.assertEqual(self.hook.bad_token["suppressed"], 4)
 
 
+class ConfigEndpointTest(WebhookTestCase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.bot.switch_backend = mock.AsyncMock()
+
+    async def test_requires_the_token(self):
+        resp = await self.client.post("/config", json={"backend": "mistral"}, headers={})
+        self.assertEqual(resp.status, 401)
+        self.bot.switch_backend.assert_not_called()
+
+    async def test_rejects_unknown_backend_and_bad_body(self):
+        for payload in ({"backend": "gemini"}, {"backend": 5}, {"model": "x"}, []):
+            with self.subTest(payload=payload):
+                resp = await self.client.post("/config", json=payload, headers=AUTH)
+                self.assertEqual(resp.status, 400)
+        self.bot.switch_backend.assert_not_called()
+
+    async def test_empty_model_is_rejected(self):
+        resp = await self.client.post("/config", json={"backend": "mistral", "model": "  "}, headers=AUTH)
+        self.assertEqual(resp.status, 400)
+
+    async def test_switch_runs_and_reports_the_new_backend(self):
+        self.bot.switch_backend = mock.AsyncMock()
+        self.bot.backend_name = "mistral"
+        self.bot.backend_model = "devstral-small-latest"
+        resp = await self.client.post("/config", json={"backend": "mistral", "model": "devstral-small-latest"}, headers=AUTH)
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(
+            await resp.json(),
+            {"ok": True, "backend": "mistral", "model": "devstral-small-latest"},
+        )
+        self.bot.switch_backend.assert_awaited_once_with("mistral", "devstral-small-latest")
+
+    async def test_missing_credentials_surface_as_400(self):
+        self.bot.switch_backend = mock.AsyncMock(side_effect=ValueError("MISTRAL_API_KEY is not configured"))
+        resp = await self.client.post("/config", json={"backend": "mistral"}, headers=AUTH)
+        self.assertEqual((resp.status, await resp.text()), (400, "MISTRAL_API_KEY is not configured"))
+
+    async def test_connect_failure_keeps_old_backend(self):
+        self.bot.switch_backend = mock.AsyncMock(side_effect=RuntimeError("cannot connect"))
+        resp = await self.client.post("/config", json={"backend": "mistral"}, headers=AUTH)
+        self.assertEqual(resp.status, 502)
+
+
 if __name__ == "__main__":
     unittest.main()

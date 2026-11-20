@@ -5,6 +5,9 @@ import unittest
 import bot
 
 PAYLOAD = {
+    "backend": "claude",
+    "agent_model": None,
+    "claude_auth_available": True,
     "agent_ok": True,
     "agent_failure": None,
     "matrix_connected": True,
