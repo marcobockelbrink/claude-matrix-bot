@@ -735,6 +735,7 @@ class Bot:
 
         # Status bookkeeping (served on /status).
         self.run_history: deque = deque(maxlen=20)
+        self.runs_total = 0
         self.agent_state: dict = {"ok": True, "failure": None}
         self.last_sync = 0.0
         self.signal_connected = False
@@ -748,16 +749,36 @@ class Bot:
         if self.state.pop("planned_restart", None):
             save_state(self.state)
 
+    def _task_done(self, task: asyncio.Task) -> None:
+        self.background_tasks.discard(task)
+        # Fire-and-forget still means failures are visible: an exception in a
+        # run's delivery would otherwise be silently lost with the task.
+        if not task.cancelled() and task.exception() is not None:
+            log.error(
+                "Background task failed: %s",
+                task.exception(),
+                exc_info=task.exception(),
+            )
+
     def spawn(self, coro) -> None:
         task = asyncio.create_task(coro)
         self.background_tasks.add(task)
-        task.add_done_callback(self.background_tasks.discard)
+        task.add_done_callback(self._task_done)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
     async def run(self) -> None:
         self.http = aiohttp.ClientSession()
-        await self._connect_claude()
-        await self._connect_matrix()
+        try:
+            await self._connect_claude()
+            await self._connect_matrix()
+        except BaseException:
+            if self.claude:
+                try:
+                    await self.claude.disconnect()
+                except Exception:
+                    log.exception("Could not disconnect the agent session")
+            await self.http.close()
+            raise
         self._register_matrix_handlers()
 
         signal_task = (
@@ -902,6 +923,8 @@ class Bot:
 
     # ── Confirmation plumbing (chat-gated destructive commands) ───────────────
     async def ask_confirmation(self, target: Target, cmd: str) -> bool:
+        # NOTE: the wait counts into this run's AGENT_TIMEOUT_S budget; a turn
+        # stacking many confirmed commands can therefore still time out.
         await self.deliver(target, self.S["confirm"].format(cmd=cmd))
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self.pending_confirm["future"] = fut
@@ -1265,6 +1288,7 @@ class Bot:
 
     def _record_run(self, targets: list[Target], prompt: str, ok: bool, t0: float) -> None:
         self.current_run.clear()
+        self.runs_total += 1
         self.run_history.appendleft(
             {
                 "time": datetime.now(self.cfg.tz).isoformat(timespec="seconds"),
@@ -1589,7 +1613,9 @@ class Webhook:
 
     def token_ok(self, request: web.Request) -> bool:
         supplied = request.headers.get("X-Token") or request.query.get("token") or ""
-        return hmac.compare_digest(supplied, self.token)
+        # Bytes, not str: compare_digest TypeError crashes str input that is
+        # not ASCII (e.g. '?token=ä' from a scanner), which would be a 500.
+        return hmac.compare_digest(supplied.encode(), self.token.encode())
 
     def reject_bad_token(self, request: web.Request) -> web.Response:
         now = time.monotonic()
@@ -1693,7 +1719,7 @@ class Webhook:
             "confirm_destructive": cfg.confirm_destructive,
             "next_briefing": bot.briefing_next,
             "next_restart": bot.restart_next,
-            "runs_total": len(bot.run_history),
+            "runs_total": bot.runs_total,
             "last_run": bot.run_history[0] if bot.run_history else None,
             "lang": cfg.lang,
         }
