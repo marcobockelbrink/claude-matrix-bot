@@ -4,6 +4,8 @@ import asyncio
 import json
 import tempfile
 import unittest
+
+import aiohttp
 from pathlib import Path
 from unittest import mock
 
@@ -193,6 +195,103 @@ class MistralLoopTest(unittest.IsolatedAsyncioTestCase):
         await b.disconnect()  # injected http: must NOT be closed
         await b.connect()
         self.assertEqual(b.history, [])
+
+    async def test_cancel_during_bash_kills_the_child_and_rolls_back_history(self):
+        http = FakeHttp(completion(tool_calls=[tool_call("Bash", {"command": "sleep 30"})]))
+        b = make_backend(http, mock.AsyncMock(return_value=PermissionResultAllow()))
+        await b.connect()
+        task = asyncio.create_task(collect(b, "hi"))
+        await asyncio.sleep(0.3)  # let the tool call start
+        self.assertTrue(any("sleep 30" in line for line in _ps()))
+        await b.interrupt()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.2)
+        self.assertFalse(any("sleep 30" in line for line in _ps()))
+        # No dangling assistant tool_calls left in the history.
+        self.assertEqual(b.history, [{"role": "user", "content": "hi"}])
+
+    async def test_api_error_mid_tool_loop_rolls_back_history(self):
+        http = FakeHttp(
+            completion(tool_calls=[tool_call("Bash", {"command": "echo x"})]),
+            (500, {"error": "boom"}), (500, {"error": "boom"}), (500, {"error": "boom"}),
+        )
+        b = make_backend(http, mock.AsyncMock(return_value=PermissionResultAllow()))
+        await b.connect()
+        with mock.patch("asyncio.sleep", new=mock.AsyncMock()):
+            messages = await collect(b, "hi")
+        self.assertEqual(messages[-1].subtype, "error_during_execution")
+        # The answered tool round stays (call + response are consistent);
+        # nothing dangling remains for the next turn.
+        self.assertEqual([m["role"] for m in b.history], ["user", "assistant", "tool"])
+        self.assertIn("tool_calls", b.history[1])
+
+    async def test_client_error_maps_to_resettable_invalid_request(self):
+        http = FakeHttp((400, {"error": "bad request"}))
+        b = make_backend(http, mock.AsyncMock(return_value=PermissionResultAllow()))
+        await b.connect()
+        messages = await collect(b, "hi")
+        errors = [m.error for m in messages if isinstance(m, AssistantMessage)]
+        self.assertEqual(errors, ["invalid_request"])
+        # invalid_request is NOT in the cannot-fix set → judge wants a fresh session
+        verdict = bot.judge_turn(messages[-1], errors)
+        self.assertEqual(verdict[1], True)
+
+
+    async def test_bash_env_strips_claude_credentials(self):
+        captured = {}
+
+        async def fake_exec(*args, **kwargs):
+            captured.update(kwargs)
+            proc = mock.Mock()
+            proc.communicate = mock.AsyncMock(return_value=(b"ok", None))
+            proc.kill = mock.Mock()
+            return proc
+
+        with mock.patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "sekret", "PATH": "/usr/bin"}, clear=False):
+            with mock.patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+                b = make_backend(FakeHttp(), mock.AsyncMock(return_value=PermissionResultAllow()))
+                b._abort_event = asyncio.Event()
+                out = await b._bash("echo hi")
+        self.assertEqual(out.strip(), "ok")
+        env = captured["env"]
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", env)
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertEqual(env["HA_TOKEN"], "ha")  # base_env still applied
+
+    async def test_network_error_is_retried_as_server_error(self):
+        class DownHttp(FakeHttp):
+            def post(self, url, headers=None, json=None, timeout=None):
+                self.calls.append({"url": url, "json": json})
+                raise aiohttp.ClientConnectionError("down")
+
+        b = make_backend(DownHttp(), mock.AsyncMock(return_value=PermissionResultAllow()))
+        await b.connect()
+        with mock.patch("asyncio.sleep", new=mock.AsyncMock()):
+            messages = await collect(b, "hi")
+        self.assertEqual(len(b._http.calls), 3)  # retried
+        errors = [m.error for m in messages if isinstance(m, AssistantMessage)]
+        self.assertEqual(errors, ["server_error"])
+
+
+class TrimHistoryTest(unittest.TestCase):
+    def test_never_leaves_a_dangling_tool_message_at_the_head(self):
+        b = make_backend(FakeHttp(), mock.AsyncMock())
+        b.MAX_HISTORY_MESSAGES = 2
+        b.history = [
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+            {"role": "tool", "content": "out", "tool_call_id": "1"},
+            {"role": "assistant", "content": "done"},
+        ]
+        b._trim_history()
+        self.assertEqual(b.history[0]["role"], "assistant")
+        self.assertNotIn("tool_calls", b.history[0])
+
+
+def _ps():
+    import subprocess
+    return subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True).stdout.splitlines()
 
 
 class ToolJailTest(unittest.TestCase):

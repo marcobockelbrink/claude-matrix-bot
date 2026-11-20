@@ -848,7 +848,7 @@ class MistralAPIError(Exception):
         super().__init__(f"Mistral API {status}: {code}")
         self.code = code
         self.status = status
-        self.retryable = status in (429, 500, 502, 503, 504)
+        self.retryable = status in (0, 429, 500, 502, 503, 504)  # 0 = network error
 
 
 class MistralBackend:
@@ -890,6 +890,7 @@ class MistralBackend:
         self._owns_http = False
         self.history: list[dict] = []
         self._aborted = False
+        self._abort_event: asyncio.Event | None = None
         self._request: asyncio.Task | None = None
 
     async def connect(self) -> None:
@@ -899,6 +900,7 @@ class MistralBackend:
         # A fresh session loses the conversation — same contract as Claude's.
         self.history = []
         self._aborted = False
+        self._abort_event = asyncio.Event()
         log.info("Mistral agent backend connected (model=%s).", self.model)
 
     async def disconnect(self) -> None:
@@ -909,6 +911,8 @@ class MistralBackend:
 
     async def interrupt(self) -> None:
         self._aborted = True
+        if self._abort_event is not None:
+            self._abort_event.set()
         if self._request is not None and not self._request.done():
             self._request.cancel()
 
@@ -972,7 +976,13 @@ class MistralBackend:
         verdict = await self.gate("Bash", {"command": command}, None)
         if not isinstance(verdict, PermissionResultAllow):
             return f"error: command not allowed ({getattr(verdict, 'message', 'denied')})"
-        env = {**os.environ, **self.base_env}
+        # Never hand Claude credentials to a shell whose output goes to Mistral.
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+        }
+        env.update(self.base_env)
         try:
             proc = await asyncio.create_subprocess_exec(
                 "bash", "-c", command,
@@ -982,11 +992,31 @@ class MistralBackend:
             )
         except OSError as exc:
             return f"error: {exc}"
+        # Race the command against the abort event: interrupt() must stop a
+        # running child, not just the HTTP request.
+        wait_task = asyncio.ensure_future(proc.communicate())
+        abort_task = asyncio.ensure_future(self._abort_event.wait())
         try:
-            out, _ = await asyncio.wait_for(proc.communicate(), COMMAND_TIMEOUT_S)
-        except asyncio.TimeoutError:
+            done, _pending = await asyncio.wait(
+                {wait_task, abort_task},
+                timeout=COMMAND_TIMEOUT_S,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            wait_task.cancel()
+            abort_task.cancel()
+            proc.kill()
+            raise
+        if abort_task in done or self._aborted:
+            wait_task.cancel()
+            proc.kill()
+            raise asyncio.CancelledError
+        if not done:  # timed out
+            wait_task.cancel()
             proc.kill()
             return f"error: command timed out after {COMMAND_TIMEOUT_S}s"
+        out, _ = wait_task.result()
+        abort_task.cancel()
         text = out.decode(errors="replace")
         head = text[:TOOL_OUTPUT_CHARS]
         return head + (f"\n…(output truncated, {len(text)} chars total)" if len(text) > TOOL_OUTPUT_CHARS else "")
@@ -1008,23 +1038,32 @@ class MistralBackend:
 
     # ── the chat loop ─────────────────────────────────────────────────────────
     async def _post_chat(self, messages: list[dict]) -> dict:
-        async with self._http.post(
-            self.API_URL,
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            json={
-                "model": self.model,
-                "messages": [{"role": "system", "content": self.system_prompt}] + messages,
-                "tools": MISTRAL_TOOL_SPECS,
-                "tool_choice": "auto",
-            },
-            timeout=aiohttp.ClientTimeout(total=self.REQUEST_TIMEOUT_S),
-        ) as resp:
-            if resp.status == 200:
-                return await resp.json()
-            if resp.status not in (429, 500, 502, 503, 504):
-                body = await resp.text()
-                log.warning("Mistral API %d: %s", resp.status, loggable(body, 200))
-            raise MistralAPIError(MISTRAL_HTTP_ERROR.get(resp.status, "server_error"), resp.status)
+        try:
+            async with self._http.post(
+                self.API_URL,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "system", "content": self.system_prompt}] + messages,
+                    "tools": MISTRAL_TOOL_SPECS,
+                    "tool_choice": "auto",
+                },
+                timeout=aiohttp.ClientTimeout(total=self.REQUEST_TIMEOUT_S),
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                if resp.status not in (429, 500, 502, 503, 504):
+                    body = await resp.text()
+                    log.warning("Mistral API %d: %s", resp.status, loggable(body, 200))
+                raise MistralAPIError(
+                    MISTRAL_HTTP_ERROR.get(resp.status, "server_error" if resp.status >= 500 else "invalid_request"),
+                    resp.status,
+                )
+        except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+            # Network-level failure: retryable like a 5xx, but never confused
+            # with the turn timeout (which is asyncio.TimeoutError at the Bot
+            # level — this one is raised and converted here first).
+            raise MistralAPIError("server_error", 0) from exc
 
     async def _chat(self) -> dict:
         # One in-flight request per turn so interrupt() can cancel it; retried
@@ -1052,11 +1091,18 @@ class MistralBackend:
 
     def _trim_history(self) -> None:
         # Drop the oldest messages; memory.md is the durable memory, the tail
-        # is what keeps the conversation coherent.
-        if len(self.history) > self.MAX_HISTORY_MESSAGES:
-            dropped = len(self.history) - self.MAX_HISTORY_MESSAGES
-            self.history = self.history[dropped:]
-            log.info("Trimmed %d old messages from the Mistral session history", dropped)
+        # is what keeps the conversation coherent. Never cut between an
+        # assistant tool_calls message and its tool responses: a dangling
+        # tool message (or an unanswered call) makes the API reject the next
+        # turn with 400.
+        excess = len(self.history) - self.MAX_HISTORY_MESSAGES
+        if excess <= 0:
+            return
+        cut = excess
+        while cut < len(self.history) and self.history[cut].get("role") == "tool":
+            cut += 1
+        self.history = self.history[cut:]
+        log.info("Trimmed %d old messages from the Mistral session history", cut)
 
     @staticmethod
     def _result(subtype: str, is_error: bool = False) -> ResultMessage:
@@ -1076,6 +1122,10 @@ class MistralBackend:
             raise RuntimeError("Mistral backend is not connected")
         self._aborted = False
         self.history.append({"role": "user", "content": prompt})
+        # Position of the last unanswered assistant tool_calls message; on
+        # abort/error the history is rolled back to it, because the API rejects
+        # a turn whose tool_calls never got tool responses.
+        answered_mark = len(self.history)
         try:
             for _ in range(self.MAX_TOOL_ROUNDS):
                 data = await self._chat()
@@ -1107,6 +1157,8 @@ class MistralBackend:
                     blocks.append(ToolUseBlock(id=call.get("id", "t"), name=fn.get("name", ""), input=args))
                 yield AssistantMessage(content=blocks, model=self.model, error=None)
                 for call, block in zip(tool_calls, blocks):
+                    if self._aborted:
+                        raise asyncio.CancelledError
                     output = await self._execute(block.name, block.input)
                     self.history.append(
                         {
@@ -1116,11 +1168,14 @@ class MistralBackend:
                             "tool_call_id": call.get("id", "t"),
                         }
                     )
+                answered_mark = len(self.history)
             # The model kept calling tools without ever answering.
             yield self._result("error_max_turns")
         except asyncio.CancelledError:
+            del self.history[answered_mark:]
             raise
         except MistralAPIError as exc:
+            del self.history[answered_mark:]
             log.error("Mistral turn failed: %s", exc)
             yield AssistantMessage(content=[], model=self.model, error=exc.code)
             yield self._result("error_during_execution", is_error=True)
