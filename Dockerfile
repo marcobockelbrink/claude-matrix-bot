@@ -5,7 +5,7 @@ FROM ghcr.io/astral-sh/uv:0.12@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e
 # ── Build stage ───────────────────────────────────────────────────────────
 # Installs the locked dependencies into /install. No package needs a compiler
 # any more (matrix-nio's E2E support is vodozemac now, not python-olm).
-FROM python:3.14-slim AS builder
+FROM python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS builder
 
 WORKDIR /app
 # uv only turns uv.lock into a hashed requirements list (--locked fails the
@@ -21,7 +21,7 @@ RUN uv export --locked --no-emit-project --format requirements-txt -o locked.txt
 # Only what the bot needs at run time:
 #  - curl + ca-certificates: how the agent's Bash tool talks to the HA HTTP API
 #  - git: some Agent SDK tools expect it on PATH
-FROM python:3.14-slim
+FROM python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 
 # upgrade: pick up Debian package updates (security fixes included) that are
 # newer than the base image.
