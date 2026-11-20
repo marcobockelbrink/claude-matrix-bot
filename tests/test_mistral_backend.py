@@ -200,14 +200,24 @@ class MistralLoopTest(unittest.IsolatedAsyncioTestCase):
         http = FakeHttp(completion(tool_calls=[tool_call("Bash", {"command": "sleep 30"})]))
         b = make_backend(http, mock.AsyncMock(return_value=PermissionResultAllow()))
         await b.connect()
-        task = asyncio.create_task(collect(b, "hi"))
-        await asyncio.sleep(0.3)  # let the tool call start
-        self.assertTrue(any("sleep 30" in line for line in _ps()))
-        await b.interrupt()
-        with self.assertRaises(asyncio.CancelledError):
-            await task
-        await asyncio.sleep(0.2)
-        self.assertFalse(any("sleep 30" in line for line in _ps()))
+        procs = []
+        real_exec = asyncio.create_subprocess_exec
+
+        async def spy_exec(*args, **kwargs):
+            proc = await real_exec(*args, **kwargs)
+            procs.append(proc)
+            return proc
+
+        with mock.patch("asyncio.create_subprocess_exec", side_effect=spy_exec):
+            task = asyncio.create_task(collect(b, "hi"))
+            await asyncio.sleep(0.3)  # let the tool call start
+            self.assertEqual(len(procs), 1)
+            self.assertIsNone(procs[0].returncode)
+            await b.interrupt()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            await asyncio.sleep(0.2)
+            self.assertIsNotNone(procs[0].returncode)  # killed, not orphaned
         # No dangling assistant tool_calls left in the history.
         self.assertEqual(b.history, [{"role": "user", "content": "hi"}])
 
@@ -287,11 +297,6 @@ class TrimHistoryTest(unittest.TestCase):
         b._trim_history()
         self.assertEqual(b.history[0]["role"], "assistant")
         self.assertNotIn("tool_calls", b.history[0])
-
-
-def _ps():
-    import subprocess
-    return subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True).stdout.splitlines()
 
 
 class ToolJailTest(unittest.TestCase):
