@@ -190,7 +190,7 @@ STRINGS = {
         ),
         "confirm_hint": "Bitte mit **ja** oder **nein** antworten (oder 👍/👎).",
         "confirm_timeout": "⏱️ Keine Bestätigung erhalten — Befehl wurde NICHT ausgeführt.",
-        "online": "🟢 Bin wieder online und einsatzbereit (Version {version}).",
+        "online": "🟢 Bin wieder online und einsatzbereit (Version {version}, Backend: {backend}).",
         "agent_timeout": "⏱️ Der Agent hat zu lange gebraucht und wurde abgebrochen. Bitte nochmal versuchen.",
         "agent_reset": "⚠️ Der Agent hat nicht richtig geantwortet ({reason}). Die Sitzung wurde neu gestartet — bitte nochmal senden.",
         "agent_reset_partial": "⚠️ Der Agent hat nicht richtig geantwortet ({reason}). Die Sitzung wurde neu gestartet. Achtung: Ein Teil der Anfrage wurde möglicherweise schon ausgeführt — bitte erst prüfen, bevor du sie nochmal sendest.",
@@ -212,7 +212,7 @@ STRINGS = {
         ),
         "confirm_hint": "Please reply **yes** or **no** (or 👍/👎).",
         "confirm_timeout": "⏱️ No confirmation received — the command was NOT run.",
-        "online": "🟢 Back online and ready (version {version}).",
+        "online": "🟢 Back online and ready (version {version}, backend: {backend}).",
         "agent_timeout": "⏱️ The agent took too long and was aborted. Please try again.",
         "agent_reset": "⚠️ The agent did not answer properly ({reason}). Its session was restarted — please send that again.",
         "agent_reset_partial": "⚠️ The agent did not answer properly ({reason}). Its session was restarted. Careful: part of the request may already have been carried out — check before sending it again.",
@@ -2002,15 +2002,22 @@ class Bot:
         # "back online" would no longer be news.
         self.online_notice_due = time.time() - self.started_at < 120
 
+    def backend_label(self) -> str:
+        """Plain-text backend name for chat messages."""
+        if self.backend_name == "mistral":
+            return f"Mistral ({self.backend_model or '?'})"
+        return "Claude (Agent SDK)"
+
     async def announce_online(self) -> None:
         targets = self.notify_targets()
         if not targets:
             self._retry_online_notice()
             return
         sent = False
+        text = self.S["online"].format(version=BOT_VERSION, backend=self.backend_label())
         for target in targets:
             try:
-                await self.deliver(target, self.S["online"].format(version=BOT_VERSION))
+                await self.deliver(target, text)
                 sent = True
             except Exception:
                 log.exception("Could not send the online message to %s", loggable(str(target), 120))

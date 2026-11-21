@@ -224,7 +224,10 @@ class OnlineNoticeTest(unittest.IsolatedAsyncioTestCase):
         b.notify_targets = lambda: [("matrix", "!r:example")]
         with mock.patch("bot.save_state") as save:
             await b.announce_online()
-        b.deliver.assert_awaited_once_with(("matrix", "!r:example"), S["online"].format(version=bot.BOT_VERSION))
+        b.deliver.assert_awaited_once_with(
+            ("matrix", "!r:example"),
+            S["online"].format(version=bot.BOT_VERSION, backend=b.backend_label()),
+        )
         self.assertIn("online_notice_ts", b.state)
         save.assert_called_once()
         self.assertFalse(b.online_notice_due)
